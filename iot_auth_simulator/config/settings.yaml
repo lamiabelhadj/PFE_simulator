@@ -1,0 +1,63 @@
+# IoT Authentication Simulator Configuration
+
+simulator:
+  # Number of devices to simulate
+  num_devices: 10
+  
+  # Number of normal flow events per device
+  normal_events_per_device: 5
+  
+  # Number of replay attack events per device
+  replay_events_per_device: 2
+
+device:
+  # Possible device types
+  types:
+    - "sensor"
+    - "actuator"
+    - "gateway"
+    - "controller"
+  
+  # Possible resource classes
+  resource_classes:
+    - "constrained"
+    - "moderate"
+    - "high_capability"
+  
+  # Possible identity methods
+  identity_methods:
+    - "certificate"
+    - "preshared_key"
+    - "username_password"
+
+auth:
+  # Token expiration time in seconds
+  token_expiration_s: 3600
+  
+  # TLS enabled by default
+  tls_enabled: true
+
+mqtt:
+  # Broker host
+  broker_host: "mqtt.cloud.example.com"
+  
+  # Supported MQTT versions
+  versions:
+    - 3
+    - 4
+    - 5
+  
+  # Supported QoS levels
+  qos_levels:
+    - 0
+    - 1
+    - 2
+
+export:
+  # Output directory for generated data
+  output_dir: "data/generated"
+  
+  # Export formats
+  formats:
+    - "csv"
+    - "json"

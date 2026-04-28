@@ -1,0 +1,76 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run IoT Auth Simulator",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "${workspaceFolder}/iot_auth_simulator/main.py"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Normal Flow Tests",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "${workspaceFolder}/iot_auth_simulator/tests/test_normal_flow.py"
+      ],
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Run Replay Attack Tests",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "${workspaceFolder}/iot_auth_simulator/tests/test_replay_attack.py"
+      ],
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Run All Tests",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "${workspaceFolder}/iot_auth_simulator/tests/test_normal_flow.py"
+      ],
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "dependsOn": ["Run Replay Attack Tests"]
+    },
+    {
+      "label": "Install Dependencies",
+      "type": "shell",
+      "command": "pip",
+      "args": [
+        "install",
+        "-r",
+        "${workspaceFolder}/iot_auth_simulator/requirements.txt"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    }
+  ]
+}
