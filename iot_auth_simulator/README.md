@@ -1,201 +1,170 @@
-# IoT Authentication Flow Simulator
+# IoT Authentication Flow Simulator - Module Documentation
 
-## Project Objective
+This folder contains the core simulation engine for generating synthetic IoT authentication datasets.
 
-This project is a **synthetic data generator** for training ML-based anomaly detection systems in IoT authentication flows. It simulates realistic device authentication lifecycles and generates labeled datasets with normal and anomalous events suitable for supervised machine learning.
+For the complete project overview, objectives, architecture, and features, see the **[Global README](../README.md)** in the parent directory.
 
-## Key Features
+## 📁 Folder Structure & Components
 
-- **Complete Authentication Lifecycle Simulation**: Models device discovery, pairing, enrollment, authorization, MQTT connection, and active session phases
-- **Multiple Attack Scenarios**: Implements replay attack simulation to generate labeled anomalies
-- **ML-Ready Dataset Export**: Generates CSV and JSON outputs with 34+ features for anomaly detection
-- **Modular Architecture**: Clean separation of concerns (models, core, components, scenarios, exporters)
-- **Configurable Parameters**: YAML-based configuration for device types, token expiration, MQTT settings
-- **Unit Tests**: Includes basic tests for normal flow and replay attack scenarios
-- **Comprehensive Logging**: Detailed logging for debugging and understanding simulation flow
+This section explains what each module contains and its role in the simulator.
 
-## IoT Authentication Lifecycle
+### 📄 Root Files
 
-The simulator models a complete IoT device authentication flow with these phases:
+- **`main.py`** — Entry point for the simulator. Runs all scenarios and exports datasets
+- **`requirements.txt`** — Python package dependencies (pydantic, PyYAML, python-dateutil)
+- **`README.md`** — This file
 
-```
-INIT
-  ↓
-DISCOVERED (Device found via discovery protocol)
-  ↓
-PAIRED (Gateway/broker pairing established)
-  ↓
-ENROLLED (Device registered in auth server)
-  ↓
-AUTHORIZED (Token issued by auth server)
-  ↓
-MQTT_CONNECTED (MQTT CONNECT accepted)
-  ↓
-ACTIVE (Publishing/subscribing messages)
-  ↓
-TERMINATED (Session ended) or FAILED (Error state)
-```
+### ⚙️ config/
+Configuration and settings:
+- **`settings.yaml`** — Simulator parameters (device types, token expiration, MQTT settings, export paths)
 
-## System Architecture
+### 🧠 src/
 
-### Components
+Core simulation engine with clean modular structure:
 
-1. **Device Model**: Represents constrained IoT devices with identity attributes
-   - `device_id`: Unique identifier
-   - `device_type`: sensor, actuator, gateway, controller
-   - `resource_class`: constrained, moderate, high_capability
-   - `identity_method`: certificate, preshared_key, username_password
-   - `known_to_registry`: Boolean flag for enrollment success
+#### `src/models/` — Data Structures
+Dataclasses representing entities in the system:
+- **`device.py`** — `Device` class with identity attributes (device_id, type, resource_class, identity_method)
+- **`token.py`** — `Token` class for authorization tokens with expiration, scope, and usage tracking
+- **`session.py`** — `Session` class for MQTT sessions with connection metadata
+- **`event.py`** — `Event` class representing a single record in the ML dataset (34+ fields)
 
-2. **Edge/Gateway**: Performs device discovery, pairing, ACL enforcement, rate limiting
-   - Discovery (simulated mDNS/CoAP)
-   - Pairing with devices
-   - ACL checking for topic operations
-   - Rate limiting enforcement
+#### `src/core/` — Orchestration & State Management
+Core simulation logic:
+- **`state_machine.py`** — `StateMachine` and `LifecycleState` enum. Manages device lifecycle transitions (INIT → DISCOVERED → ... → TERMINATED)
+- **`flow_engine.py`** — `FlowEngine` class orchestrating authentication flows. Manages devices, tokens, sessions, and state transitions
+- **`event_generator.py`** — `EventGenerator` class creating Event objects from device/token/session state for dataset generation
 
-3. **Cloud/Auth Server**: Issues and validates tokens, manages device registry
-   - Device registration
-   - Token issuance with expiration
-   - Token validation and revocation
-   - Policy management
+#### `src/components/` — System Components
+Simulated system entities:
+- **`gateway.py`** — `Gateway` class simulating edge gateway. Performs device discovery, pairing, ACL checking, rate limiting
+- **`auth_server.py`** — `AuthServer` class simulating cloud auth server. Manages device registry, token issuance, validation, revocation
+- **`mqtt_broker.py`** — `MQTTBroker` class simulating MQTT broker. Handles CONNECT/DISCONNECT/PUBLISH, session management, message tracking
 
-4. **MQTT Broker**: Handles CONNECT, DISCONNECT, and PUBLISH operations
-   - CONNECT validation (checks token validity)
-   - Session management
-   - Message receipt and routing
+#### `src/scenarios/` — Attack & Normal Scenarios
+High-level authentication flow simulations:
+- **`normal_flow.py`** — `run_normal_flow()` function simulating legitimate device authentication from discovery to active messaging
+- **`replay_attack.py`** — `run_replay_attack()` function simulating replay attacks (capture token, reuse after session ends)
 
-### Data Flow
+#### `src/exporters/` — Data Export
+Output formatters:
+- **`csv_exporter.py`** — `CSVExporter` class exporting events to CSV with all 34+ fields
+- **`json_exporter.py`** — `JSONExporter` class exporting events to JSON format
 
-```
-Device → Discovery → Gateway → Pairing → Auth Server → Token Issue
-                                            ↓
-                                        Token Valid?
-                                            ↓ YES
-                                        MQTT Broker → CONNECT Accept
-                                            ↓
-                                        Session Active
-                                            ↓
-                                        PUBLISH Messages
-```
+#### `src/utils/` — Utilities
+Helper functions:
+- **`time_utils.py`** — `TimeUtils` class with timestamp formatting utilities
 
-## Generated Dataset Fields
+### 📊 data/
+Output directory for generated datasets:
+- **`raw/`** — Input data directory (for future use)
+- **`generated/`** — Generated datasets
+  - `normal_events.csv` / `normal_events.json`
+  - `replay_events.csv` / `replay_events.json`
+  - `all_events.csv` / `all_events.json`
 
-### Device Identity
-- `device_id`: Unique device identifier
-- `device_type`: Type of device (sensor, actuator, gateway, controller)
-- `resource_class`: Resource capability class (constrained, moderate, high_capability)
-- `identity_method`: Authentication method (certificate, preshared_key, username_password)
-- `known_to_registry`: Boolean indicating if device is pre-registered
+### 🧪 tests/
+Unit tests:
+- **`test_normal_flow.py`** — Tests for normal authentication flow (known devices, unknown devices, lifecycle phases)
+- **`test_replay_attack.py`** — Tests for replay attack generation (basic attacks, anomaly markers, phase progression)
 
-### Temporal & Lifecycle
-- `timestamp`: ISO 8601 timestamp of the event
-- `lifecycle_phase`: Current authentication phase (DISCOVERED, PAIRED, ENROLLED, etc.)
-- `auth_method`: Authentication method used for this phase
-- `auth_result`: Success or failure of authentication attempt
-- `auth_duration_ms`: Time taken for authentication in milliseconds
-
-### Token Information
-- `token_id`: Unique identifier for the authorization token
-- `token_valid`: Boolean indicating if token is still valid
-- `token_expired`: Boolean indicating if token has expired
-- `token_scope`: Authorization scope (e.g., "sensors/temperature,sensors/humidity")
-
-### TLS & Security
-- `tls_enabled`: Boolean indicating if TLS is enabled
-
-### MQTT Connection
-- `mqtt_version`: MQTT protocol version (3, 4, or 5)
-- `qos_level`: Quality of Service level (0, 1, or 2)
-- `mqtt_conack_val`: MQTT CONNACK return code (0=accepted, 1-5=failures)
-- `clean_session_flag`: Boolean for session cleanup preference
-- `keep_alive_s`: Keep-alive interval in seconds
-
-### Topic & Authorization
-- `requested_topic`: MQTT topic device is trying to access
-- `topic`: Topic for current publish/subscribe
-- `token_scope_match`: Boolean indicating if token scope matches requested topic
-- `acl_match`: Boolean indicating if device ACL allows the operation
-
-### Message/Connection Metrics
-- `message_frequency`: Messages per second during connection
-- `payload_size_bytes`: Size of message payload in bytes
-- `latency_ms`: Connection latency in milliseconds
-- `connection_duration_s`: How long the connection has been active in seconds
-- `duplicate_message_flag`: Boolean indicating duplicate message detection
-
-### Anomaly Indicators
-- `message_frequency_anomaly_flag`: Boolean for abnormally high message frequency
-- `latency_anomaly_flag`: Boolean for abnormally high latency
-- `is_anomaly`: Primary label for anomaly detection (True/False)
-
-### Attack Information
-- `attack_type`: Type of attack ("" for normal, "replay", "impersonation", etc.)
-- `attacker_type`: Category of attacker ("" for normal, "non-invasive", "invasive", etc.)
-
-## Project Structure
+## Module Dependencies & Data Flow
 
 ```
-iot_auth_simulator/
-│
-├── README.md                 # This file
-├── requirements.txt          # Python dependencies
-├── main.py                   # Main entry point
-│
-├── config/
-│   └── settings.yaml         # Configuration parameters
-│
-├── src/
-│   ├── __init__.py
-│   │
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── device.py         # Device dataclass
-│   │   ├── session.py        # MQTT session dataclass
-│   │   ├── token.py          # Authorization token dataclass
-│   │   └── event.py          # Event/record for ML dataset
-│   │
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── state_machine.py  # Lifecycle state machine
-│   │   ├── flow_engine.py    # Orchestrates authentication flows
-│   │   └── event_generator.py# Generates events from states
-│   │
-│   ├── components/
-│   │   ├── __init__.py
-│   │   ├── gateway.py        # Edge gateway component
-│   │   ├── auth_server.py    # Auth server component
-│   │   └── mqtt_broker.py    # MQTT broker component
-│   │
-│   ├── scenarios/
-│   │   ├── __init__.py
-│   │   ├── normal_flow.py    # Normal authentication scenario
-│   │   └── replay_attack.py  # Replay attack scenario
-│   │
-│   ├── exporters/
-│   │   ├── __init__.py
-│   │   ├── csv_exporter.py   # Export events to CSV
-│   │   └── json_exporter.py  # Export events to JSON
-│   │
-│   └── utils/
-│       ├── __init__.py
-│       └── time_utils.py     # Time utility functions
-│
-├── data/
-│   ├── raw/                  # Raw input data (if needed)
-│   └── generated/            # Generated datasets
-│       ├── normal_events.csv
-│       ├── normal_events.json
-│       ├── replay_events.csv
-│       ├── replay_events.json
-│       ├── all_events.csv
-│       └── all_events.json
-│
-└── tests/
-    ├── test_normal_flow.py   # Tests for normal flow
-    └── test_replay_attack.py # Tests for replay attacks
+main.py (Entry Point)
+  ├─→ src/models/ (Device, Token, Session, Event)
+  ├─→ src/core/ (FlowEngine, StateMachine, EventGenerator)
+  ├─→ src/components/ (Gateway, AuthServer, MQTTBroker)
+  ├─→ src/scenarios/ (normal_flow, replay_attack)
+  └─→ src/exporters/ (CSVExporter, JSONExporter)
+        └─→ data/generated/ (Output files)
 ```
 
-## How to Run
+**Flow:**
+1. `main.py` creates devices and components
+2. Passes them to scenarios (normal_flow, replay_attack)
+3. Scenarios use FlowEngine to orchestrate authentication
+4. EventGenerator creates Event objects representing each step
+5. Events are exported to CSV/JSON by exporters
+6. Tests validate scenarios work correctly
+
+## How to Run This Module
+
+### Quick Start
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run simulator (generates all datasets)
+python main.py
+
+# Run tests
+python tests/test_normal_flow.py
+python tests/test_replay_attack.py
+```
+
+### Output
+- Simulates 5 devices with normal and replay attack flows
+- Generates ~400+ events total
+- Creates 6 output files in `data/generated/`:
+  - CSV files: easily opened in Excel, analyzable with pandas
+  - JSON files: suitable for programmatic processing
+
+## Code Organization Principles
+
+1. **Models Layer**: Pure dataclasses, no business logic
+2. **Core Layer**: State management and orchestration
+3. **Components Layer**: System entity simulation
+4. **Scenarios Layer**: High-level flow definitions
+5. **Exporters Layer**: Output formatting
+
+This separation allows:
+- Easy testing of individual modules
+- Simple addition of new scenarios
+- Clean dependency injection
+- Minimal coupling between layers
+
+## Key Classes & Methods
+
+### Device (`src/models/device.py`)
+```python
+device = Device(
+    device_id="device_001",
+    device_type="sensor",
+    resource_class="constrained",
+    identity_method="certificate"
+)
+```
+
+### StateMachine (`src/core/state_machine.py`)
+```python
+sm = StateMachine()
+sm.transition_to(LifecycleState.DISCOVERED)
+current = sm.current_state
+```
+
+### FlowEngine (`src/core/flow_engine.py`)
+```python
+engine = FlowEngine()
+engine.register_device(device)
+token = engine.issue_token(device_id)
+event = engine.generate_event(device_id)
+```
+
+### Scenarios
+```python
+# Normal flow
+events = run_normal_flow(device, flow_engine, auth_server, mqtt_broker)
+
+# Replay attack
+events = run_replay_attack(device, flow_engine, auth_server, mqtt_broker)
+```
+
+### Export
+```python
+CSVExporter.export(events, Path("data/generated/events.csv"))
+JSONExporter.export(events, Path("data/generated/events.json"))
+```
 
 ### Prerequisites
 
