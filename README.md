@@ -3,7 +3,7 @@
 
 ---
 
-## 📌 Project Overview
+## Project Overview
 
 This project implements a **simulation framework for IoT authentication flows** with the objective of generating **realistic synthetic datasets** for **anomaly detection in cybersecurity**.
 
@@ -19,7 +19,7 @@ The simulator models the complete lifecycle of an IoT device authentication proc
 
 ---
 
-## 🎯 Objectives
+## Objectives
 
 - Model a **realistic IoT authentication lifecycle**
 - Simulate **normal and anomalous behaviors**
@@ -29,7 +29,7 @@ The simulator models the complete lifecycle of an IoT device authentication proc
 
 ---
 
-## 🧠 Core Concept
+## Core Concept
 
 Real-world IoT security datasets are:
 - **Scarce** — difficult to obtain in real deployments
@@ -45,11 +45,11 @@ Real-world IoT security datasets are:
 
 ---
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 The system is based on a **3-layer architecture**:
 
-### 🔹 Layer 1 — IoT Device
+###  Layer 1 — IoT Device
 Simulates constrained IoT devices with:
 - Limited computational resources
 - Pre-shared identity credentials
@@ -71,7 +71,7 @@ Simulates constrained IoT devices with:
 
 ---
 
-### 🔹 Layer 2 — Edge / Gateway (Core Layer)
+### Layer 2 — Edge / Gateway (Core Layer)
 Central orchestration component of the system.
 
 **Key Responsibilities:**
@@ -82,11 +82,11 @@ Central orchestration component of the system.
 - 🔍 Anomaly observation & event labeling
 - 📊 Traffic aggregation & metrics
 
-👉 **This is the primary observation point for anomaly detection** — all authentication attempts and message flows are logged here with rich contextual information.
+ **This is the primary observation point for anomaly detection** — all authentication attempts and message flows are logged here with rich contextual information.
 
 ---
 
-### 🔹 Layer 3 — Cloud / Backend
+###  Layer 3 — Cloud / Backend
 - 🔑 Authorization Server (OAuth2 / ACE compatible)
 - 📋 Policy repository
 - 💾 Dataset storage
@@ -94,7 +94,7 @@ Central orchestration component of the system.
 
 ---
 
-## 🔐 Authentication Model
+##  Authentication Model
 
 ### Current Implementation (MVP)
 - **Key exchange**: ECDH-based (pairing phase)
@@ -146,7 +146,7 @@ Can transition to FAILED at any phase
 
 The simulator supports multiple attack types:
 
-### 🎯 Priority Scenarios (Current/MVP)
+### Priority Scenarios (Current/MVP)
 - ✅ **Replay Attack** — Reuse of captured valid tokens after session termination
 - 🔄 **In Progress**: Impersonation, DoS/Flood scenarios
 
@@ -306,7 +306,7 @@ PFE_simulator/
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 - Python 3.8+
@@ -397,7 +397,7 @@ print(anomalies['attack_type'].value_counts())
 
 ---
 
-## 🎯 Future Enhancements
+##  Future Enhancements
 
 ### Short-term (v0.2)
 - [ ] Add Proof of Possession (PoP) implementation
@@ -444,7 +444,7 @@ This project is provided for research and educational purposes.
 
 ---
 
-## 📞 Support
+##  Support
 
 For questions, issues, or suggestions:
 - Review code documentation in modules
