@@ -1,4 +1,4 @@
-"""Auth Server component for IoT authentication simulator.
+"""
 
 The auth server performs:
 - Token issuance

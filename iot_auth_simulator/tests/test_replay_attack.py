@@ -18,7 +18,7 @@ def test_replay_attack_basic():
         device_id="test_device_replay",
         device_type="sensor",
         resource_class="constrained",
-        identity_method="certificate",
+        identity_method="preshared_key",
         known_to_registry=True,
     )
     
@@ -42,7 +42,7 @@ def test_replay_attack_has_anomalies():
         device_id="test_device_replay_anomaly",
         device_type="sensor",
         resource_class="constrained",
-        identity_method="certificate",
+        identity_method="preshared_key",
         known_to_registry=True,
     )
     

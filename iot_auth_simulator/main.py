@@ -38,7 +38,7 @@ def generate_test_devices() -> list[Device]:
     devices = []
     device_types = ["sensor", "actuator", "gateway", "controller"]
     resource_classes = ["constrained", "moderate", "high_capability"]
-    identity_methods = ["certificate", "preshared_key", "username_password"]
+    identity_methods = ["preshared_key", "username_password"]
     
     for i in range(5):
         device = Device(

@@ -40,7 +40,7 @@ class MQTTBroker:
         self,
         device_id: str,
         token: Token,
-        mqtt_version: int = 4,
+        mqtt_version: int = 5,
         clean_session: bool = True,
         keep_alive_s: int = 60,
     ) -> tuple[bool, int, Optional[Session]]:

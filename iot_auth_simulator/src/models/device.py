@@ -14,7 +14,7 @@ class Device:
         device_id: Unique identifier for the device
         device_type: Type of device (sensor, actuator, gateway, controller)
         resource_class: Resource capability (constrained, moderate, high_capability)
-        identity_method: Method of identity verification (certificate, preshared_key, username_password)
+        identity_method: Method of identity verification (preshared_key, username_password)
         known_to_registry: Whether device is registered in the auth server registry
         mac_address: MAC address of the device
         firmware_version: Device firmware version

@@ -36,7 +36,7 @@ class Gateway:
     
     def discover_device(self, device: Device) -> bool:
         """
-        Discover a device (simulated mDNS/CoAP discovery).
+        Discover a device (simulated mDNS(exp) discovery).
         
         Args:
             device: Device to discover

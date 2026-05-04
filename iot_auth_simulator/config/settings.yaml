@@ -2,7 +2,7 @@
 
 simulator:
   # Number of devices to simulate
-  num_devices: 10
+  num_devices: 20
   
   # Number of normal flow events per device
   normal_events_per_device: 5
@@ -26,7 +26,7 @@ device:
   
   # Possible identity methods
   identity_methods:
-    - "certificate"
+    # - "certificate" we can add it later if we want to simulate certificate-based authentication
     - "preshared_key"
     - "username_password"
 
@@ -41,7 +41,7 @@ mqtt:
   # Broker host
   broker_host: "mqtt.cloud.example.com"
   
-  # Supported MQTT versions
+  # Supported MQTT versions , we can use multiple versions or fix only one (5 for example)
   versions:
     - 3
     - 4

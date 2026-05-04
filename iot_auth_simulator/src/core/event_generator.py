@@ -73,7 +73,7 @@ class EventGenerator:
             LifecycleState.ENROLLED,
             LifecycleState.AUTHORIZED,
         ]:
-            event.auth_method = "certificate"
+            event.auth_method = device.identity_method
             event.auth_result = "success" if not is_anomaly else "fail"
             event.auth_duration_ms = random.uniform(50, 200)
         

@@ -19,7 +19,7 @@ def test_normal_flow_basic():
         device_id="test_device_001",
         device_type="sensor",
         resource_class="constrained",
-        identity_method="certificate",
+        identity_method="preshared_key",
         known_to_registry=True,
     )
     
@@ -78,7 +78,7 @@ def test_normal_flow_unknown_device():
         device_id="unknown_device",
         device_type="sensor",
         resource_class="constrained",
-        identity_method="certificate",
+        identity_method="preshared_key",
         known_to_registry=False,
     )
     
