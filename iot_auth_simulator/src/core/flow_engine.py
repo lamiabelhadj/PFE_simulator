@@ -36,6 +36,7 @@ class FlowEngine:
     
     def register_device(self, device: Device) -> None:
         """
+        stores the device in the engine and creates its state machine
         Register a device with the engine.
         
         Args:
@@ -47,6 +48,7 @@ class FlowEngine:
     
     def issue_token(self, device_id: str, scope: str = "sensors/*") -> Optional[Token]:
         """
+         creates a token for the engine’s workflow
         Issue a token to a device.
         
         Args:
@@ -66,6 +68,7 @@ class FlowEngine:
     
     def create_session(self, device_id: str, token_id: str) -> Optional[Session]:
         """
+        starts a session for the current simulated device
         Create an MQTT session for a device.
         
         Args:
@@ -136,6 +139,7 @@ class FlowEngine:
         attacker_type: str = "",
     ) -> Optional[Event]:
         """
+         produces an event using the current device state, token, and session
         Generate an event for a device.
         
         Args:
