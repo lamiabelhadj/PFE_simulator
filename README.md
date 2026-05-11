@@ -100,6 +100,7 @@ Central orchestration component of the system.
 - **Key exchange**: ECDH-based (pairing phase)
 - **Identity mechanism**: Pre-Shared Key (PSK) — simplified for MVP
 - **Authorization**: Token-based (OAuth2 / ACE compatible)
+- **Payload hashing**: BLAKE2s for MQTT payload fingerprints
 - **Transport Security**: MQTT over TLS
 
 ### Session Management
@@ -214,7 +215,7 @@ Each simulation produces structured records aligned with the retained feature se
 - `authorization_result`, `topic_scope_violation`, `retain_flag`
 
 ### MQTT Session
-- `message_id`, `duplicate_flag`, `payload_length`, `payload_hash`
+- `message_id`, `duplicate_flag`, `payload_length`, `payload_hash`, `hash_method`
 - `qos_level`, `message_rate`, `byte_rate`, `session_duration`
 
 ### Continuous Re-authentication

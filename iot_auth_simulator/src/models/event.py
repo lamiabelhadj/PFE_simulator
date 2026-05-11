@@ -68,6 +68,7 @@ class Event:
     duplicate_flag: bool = False
     payload_length: int = 0
     payload_hash: str = ""
+    hash_method: str = "BLAKE2s"
     qos_level: int = 0
     message_rate: float = 0.0
     byte_rate: float = 0.0

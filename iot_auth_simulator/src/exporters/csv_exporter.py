@@ -64,6 +64,7 @@ class CSVExporter:
         "duplicate_flag",
         "payload_length",
         "payload_hash",
+        "hash_method",
         "qos_level",
         "message_rate",
         "byte_rate",

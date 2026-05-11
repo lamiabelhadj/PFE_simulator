@@ -1,5 +1,6 @@
 """Event generator for creating ML dataset events."""
 
+import hashlib
 import random
 from datetime import datetime, timedelta
 from typing import Optional
@@ -56,81 +57,141 @@ class EventGenerator:
         """
         event = Event()
         
-        # Device identity
+        # Identity and discovery
         event.device_id = device.device_id
-        event.device_type = device.device_type
-        event.resource_class = device.resource_class
-        event.identity_method = device.identity_method
-        event.known_to_registry = device.known_to_registry
-        
+        event.claimed_device_id = device.device_id
+        event.source_ip = self._source_ip_for_device(device.device_id)
+        event.registered_device = device.known_to_registry
+        event.source_connection_count = random.randint(1, 3)
+        event.source_diversity = random.randint(1, 2)
+
         # Lifecycle
         event.lifecycle_phase = lifecycle_phase.value
-        
-        # Authentication
-        if lifecycle_phase in [
-            LifecycleState.DISCOVERED,
-            LifecycleState.PAIRED,
-            LifecycleState.ENROLLED,
-            LifecycleState.AUTHORIZED,
-        ]:
-            event.auth_method = device.identity_method
+        event.attack_type = attack_type or "normal"
+        event.attack_phase = lifecycle_phase.value if is_anomaly else ""
+
+        # Network baseline
+        event.tcp_rtt = random.uniform(15, 120)
+        event.packet_rate = random.uniform(0.5, 3.0)
+        event.inter_arrival_time = random.uniform(0.2, 2.0)
+        event.frame_length = random.randint(64, 512)
+        event.tcp_segment_len = max(0, event.frame_length - 54)
+        event.connection_duration = random.uniform(0.2, 4.0)
+
+        if lifecycle_phase == LifecycleState.DISCOVERED:
+            event.mqtt_msg_type = "DISCOVERY"
+            if is_anomaly:
+                event.packet_rate = random.uniform(20, 80)
+                event.source_connection_count = random.randint(10, 60)
+                event.source_diversity = random.randint(4, 20)
+
+        if lifecycle_phase == LifecycleState.PAIRED:
+            event.pairing_result = "success" if not is_anomaly else "fail"
+            event.pairing_latency_ms = random.uniform(40, 250)
+            if is_anomaly:
+                event.pairing_latency_ms = random.uniform(800, 3000)
+                event.connection_duration = random.uniform(10, 60)
+
+        if lifecycle_phase == LifecycleState.FAILED:
+            event.auth_result = "fail"
+            event.credential_status = "invalid" if not device.known_to_registry else event.credential_status
+            event.gateway_decision = "reject"
+            event.severity = "medium" if is_anomaly else "low"
+
+        if lifecycle_phase in [LifecycleState.ENROLLED, LifecycleState.AUTHORIZED]:
+            event.credential_status = "valid" if not is_anomaly else random.choice(
+                ["invalid", "expired", "stolen", "malformed"]
+            )
             event.auth_result = "success" if not is_anomaly else "fail"
-            event.auth_duration_ms = random.uniform(50, 200)
-        
-        # Token information
-        if token:
-            event.token_id = token.token_id
-            event.token_valid = token.is_valid()
-            event.token_expired = token.is_expired()
-            event.token_scope = token.scope
+            event.auth_latency_ms = random.uniform(50, 200)
+            event.failed_auth_count = 0 if not is_anomaly else random.randint(1, 8)
+            event.username_present = device.identity_method == "username_password"
+            event.password_present = device.identity_method == "username_password"
+            event.username_length = random.randint(8, 16) if event.username_present else 0
+            event.password_length = random.randint(12, 24) if event.password_present else 0
+            event.connack_code = 0 if event.auth_result == "success" else random.randint(1, 5)
         
         # MQTT specific
         if lifecycle_phase in [
+            LifecycleState.AUTHORIZED,
             LifecycleState.MQTT_CONNECTED,
             LifecycleState.ACTIVE,
+            LifecycleState.REAUTH_REQUIRED,
         ]:
             event.mqtt_version = session.mqtt_version if session else random.choice([3, 4, 5])
+            event.mqtt_msg_type = "CONNECT" if lifecycle_phase == LifecycleState.MQTT_CONNECTED else "PUBLISH"
+            event.connect_flags = "clean_session" if (not session or session.clean_session) else "session_present"
+            event.clean_session = session.clean_session if session else True
+            event.keep_alive = session.keep_alive_s if session else 60
             event.qos_level = random.choice([0, 1, 2])
-            event.topic = f"sensors/device_{device.device_id}/data"
-            event.requested_topic = event.topic
-            event.acl_match = True if not is_anomaly else random.choice([True, False])
+            event.requested_qos = event.qos_level
+            event.granted_qos = event.qos_level if not is_anomaly else random.choice([0, 1])
+            event.operation = "publish"
+            event.requested_topic = f"sensors/device_{device.device_id}/data"
+            event.topic_length = len(event.requested_topic)
+            event.authorization_result = "allowed" if not is_anomaly else random.choice(["allowed", "denied"])
+            event.topic_scope_violation = is_anomaly and random.choice([True, False])
+            event.retain_flag = False if not is_anomaly else random.choice([False, True])
             
             # Message metrics (normal or anomalous)
             if is_anomaly and attack_type == "replay":
-                event.message_frequency = random.uniform(10, 50)  # Higher frequency
-                event.latency_ms = random.uniform(500, 2000)  # Higher latency
-                event.message_frequency_anomaly_flag = True
-                event.latency_anomaly_flag = True
-                event.duplicate_message_flag = True
+                event.message_rate = random.uniform(10, 50)
+                event.byte_rate = random.uniform(5000, 50000)
+                event.duplicate_flag = True
+                event.replay_window_violation = True
+                event.behavior_deviation_score = random.uniform(0.75, 1.0)
+                event.trust_score = random.uniform(0.0, 0.35)
+                event.gateway_decision = random.choice(["reject", "block", "re-authenticate"])
+                event.severity = "high"
+                event.source_ip_change = True
             else:
-                event.message_frequency = random.uniform(0.1, 2.0)
-                event.latency_ms = random.uniform(10, 100)
+                event.message_rate = random.uniform(0.1, 2.0)
+                event.byte_rate = random.uniform(100, 2000)
+                event.behavior_deviation_score = random.uniform(0.0, 0.2)
             
-            event.payload_size_bytes = random.randint(50, 1000)
+            event.payload_length = random.randint(50, 1000)
+            event.hash_method = "BLAKE2s"
+            event.payload_hash = self._payload_hash(device.device_id, event.lifecycle_phase, event.payload_length)
+            event.message_id = self._message_id(device.device_id)
         
         # Session information
         if session:
             event.mqtt_version = session.mqtt_version
-            event.clean_session_flag = session.clean_session
-            event.keep_alive_s = session.keep_alive_s
-            event.mqtt_conack_val = 0 if event.auth_result == "success" else random.randint(1, 5)
+            event.clean_session = session.clean_session
+            event.keep_alive = session.keep_alive_s
+            event.connack_code = 0 if event.auth_result == "success" else random.randint(1, 5)
+            event.session_present = True
             if session.is_active():
-                event.connection_duration_s = (datetime.utcnow() - session.started_at).total_seconds()
-        
-        # TLS
-        event.tls_enabled = True
+                event.session_duration = (datetime.utcnow() - session.started_at).total_seconds()
         
         # Anomaly markers
         event.is_anomaly = is_anomaly
-        event.attack_type = attack_type
+        event.attack_type = attack_type or "normal"
         event.attacker_type = attacker_type
         
         if is_anomaly and attack_type == "replay":
-            event.duplicate_message_flag = True
-            event.message_frequency_anomaly_flag = True
+            event.duplicate_flag = True
+            event.replay_window_violation = True
+            event.attack_phase = lifecycle_phase.value
+            event.severity = "high"
         
         return event
-    
+
+    @staticmethod
+    def _source_ip_for_device(device_id: str) -> str:
+        """Create a stable private source IP for a synthetic device."""
+        digest = hashlib.blake2s(device_id.encode("utf-8"), digest_size=2).digest()
+        return f"10.0.{digest[0]}.{max(2, digest[1])}"
+
+    @staticmethod
+    def _payload_hash(device_id: str, phase: str, payload_length: int) -> str:
+        seed = f"{device_id}:{phase}:{payload_length}:{random.random()}".encode("utf-8")
+        return hashlib.blake2s(seed, digest_size=16).hexdigest()
+
+    @staticmethod
+    def _message_id(device_id: str) -> str:
+        return f"msg_{device_id}_{random.randint(100000, 999999)}"
+
     def generate_normal_authentication_flow(self, device: Device) -> list[Event]:
         """
         Generate a series of events for a normal authentication flow.

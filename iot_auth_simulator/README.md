@@ -13,6 +13,7 @@ This section explains what each module contains and its role in the simulator.
 - **`main.py`** — Entry point for the simulator. Runs all scenarios and exports datasets
 - **`requirements.txt`** — Python package dependencies (pydantic, PyYAML, python-dateutil)
 - **`README.md`** — This file
+- **`FUTURE_MODIFIABLE_VARIABLES.md`** — Developer notes for tunable variables and future enhancement points
 
 ### ⚙️ config/
 Configuration and settings:
@@ -27,7 +28,7 @@ Dataclasses representing entities in the system:
 - **`device.py`** — `Device` class with identity attributes (device_id, type, resource_class, identity_method)
 - **`token.py`** — `Token` class for authorization tokens with expiration, scope, and usage tracking
 - **`session.py`** — `Session` class for MQTT sessions with connection metadata
-- **`event.py`** — `Event` class representing a single record in the the ML dataset (34+ fields)
+- **`event.py`** — `Event` class representing a single record in the  dataset schema
 
 #### `src/core/` — Orchestration & State Management
 Core simulation logic:
