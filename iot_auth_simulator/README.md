@@ -27,7 +27,7 @@ Dataclasses representing entities in the system:
 - **`device.py`** — `Device` class with identity attributes (device_id, type, resource_class, identity_method)
 - **`token.py`** — `Token` class for authorization tokens with expiration, scope, and usage tracking
 - **`session.py`** — `Session` class for MQTT sessions with connection metadata
-- **`event.py`** — `Event` class representing a single record in the ML dataset (34+ fields)
+- **`event.py`** — `Event` class representing a single record in the the ML dataset (34+ fields)
 
 #### `src/core/` — Orchestration & State Management
 Core simulation logic:
@@ -48,7 +48,7 @@ High-level authentication flow simulations:
 
 #### `src/exporters/` — Data Export
 Output formatters:
-- **`csv_exporter.py`** — `CSVExporter` class exporting events to CSV with all 34+ fields
+- **`csv_exporter.py`** — `CSVExporter` class exporting events to CSV with the retained feature columns
 - **`json_exporter.py`** — `JSONExporter` class exporting events to JSON format
 
 #### `src/utils/` — Utilities

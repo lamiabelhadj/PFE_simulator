@@ -49,13 +49,12 @@ def run_replay_attack(
     legitimate_events = run_normal_flow(device, flow_engine, auth_server, mqtt_broker)
     events.extend(legitimate_events)
     
-    # Extract the captured token from events
+    # Extract the captured token from the engine state. Token identifiers are
+    # intentionally not part of the retained dataset feature set.
     captured_token_id = None
-    captured_session_id = None
-    for event in legitimate_events:
-        if event.token_id and event.lifecycle_phase in ["AUTHORIZED", "MQTT_CONNECTED", "ACTIVE"]:
-            captured_token_id = event.token_id
-            captured_session_id = event.token_id  # We'll use token_id as reference
+    for token_id, token in flow_engine.active_tokens.items():
+        if token.device_id == device.device_id:
+            captured_token_id = token_id
             break
     
     if not captured_token_id:
@@ -93,8 +92,11 @@ def run_replay_attack(
             attacker_type="non-invasive",
         )
         event.auth_result = "fail"
-        event.token_expired = True
+        event.credential_status = "expired"
+        event.gateway_decision = "reject"
+        event.severity = "medium"
         event.lifecycle_phase = LifecycleState.AUTHORIZED.value
+        event.attack_phase = event.lifecycle_phase
         events.append(event)
         logger.warning(f"Replay attack failed (expired token): {event}")
     else:
@@ -109,8 +111,11 @@ def run_replay_attack(
                 attacker_type="non-invasive",
             )
             event.auth_result = "fail"
-            event.token_expired = True
+            event.credential_status = "expired"
+            event.gateway_decision = "reject"
+            event.severity = "medium"
             event.lifecycle_phase = LifecycleState.AUTHORIZED.value
+            event.attack_phase = event.lifecycle_phase
             events.append(event)
             logger.warning(f"Replay attack failed (token expired): {event}")
         elif captured_token.used:
@@ -122,8 +127,11 @@ def run_replay_attack(
                 attacker_type="non-invasive",
             )
             event.auth_result = "fail"
-            event.duplicate_message_flag = True
+            event.duplicate_flag = True
+            event.replay_window_violation = True
+            event.gateway_decision = "block"
             event.lifecycle_phase = LifecycleState.AUTHORIZED.value
+            event.attack_phase = event.lifecycle_phase
             events.append(event)
             logger.warning(f"Replay attack detected (token reuse): {event}")
         else:
@@ -149,9 +157,10 @@ def run_replay_attack(
                     attack_type="replay",
                     attacker_type="non-invasive",
                 )
-                event.duplicate_message_flag = True
-                event.message_frequency_anomaly_flag = True
+                event.duplicate_flag = True
+                event.replay_window_violation = True
                 event.lifecycle_phase = LifecycleState.MQTT_CONNECTED.value
+                event.attack_phase = event.lifecycle_phase
                 events.append(event)
                 logger.warning(f"Replay attack succeeded (anomalous connection): {event}")
                 
@@ -170,8 +179,10 @@ def run_replay_attack(
                         attack_type="replay",
                         attacker_type="non-invasive",
                     )
-                    event.duplicate_message_flag = True
+                    event.duplicate_flag = True
+                    event.replay_window_violation = True
                     event.lifecycle_phase = LifecycleState.ACTIVE.value
+                    event.attack_phase = event.lifecycle_phase
                     events.append(event)
                     logger.warning(f"Replay attack active event {i+1}: {event}")
                 

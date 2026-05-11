@@ -175,11 +175,14 @@ Reuse of a previously captured and valid authentication element (e.g., token) af
    - If **still valid** → Connection succeeds (marked as anomaly)
 
 **Detection Signals Generated:**
-- `duplicate_message_flag`: True when token reused
-- `message_frequency_anomaly_flag`: Higher frequency during attack
-- `latency_anomaly_flag`: Abnormal latency patterns
+- `duplicate_flag`: True when a replayed message/session is detected
+- `replay_window_violation`: True when reuse occurs outside the allowed replay window
+- `message_rate` and `byte_rate`: Elevated traffic during replay attempts
+- `trust_score` and `behavior_deviation_score`: Continuous re-authentication signals
 - `is_anomaly`: Primary label (True)
 - `attack_type`: "replay"
+- `attack_phase`: Lifecycle phase where the replay appears
+- `severity`: Risk severity label
 - `attacker_type`: "non-invasive"
 
 **Why PoP Removal Matters:**
@@ -189,59 +192,37 @@ Without Proof of Possession verification, replay attacks are possible with just 
 
 ## 📊 Generated Dataset Features
 
-Each simulation produces structured records with 34+ features:
+Each simulation produces structured records aligned with the retained feature set from the mapping document:
 
-### Device Identity Features (5 fields)
-- `device_id`: Unique device identifier
-- `device_type`: Type of device
-- `resource_class`: Resource capability
-- `identity_method`: Authentication method
-- `known_to_registry`: Registration status
+### Identity and Discovery
+- `device_id`, `claimed_device_id`, `source_ip`, `gateway_id`
+- `registered_device`, `source_connection_count`, `source_diversity`
 
-### Temporal & Lifecycle Features (5 fields)
-- `timestamp`: Event timestamp (ISO 8601)
-- `lifecycle_phase`: Current authentication phase
-- `auth_method`: Authentication method used
-- `auth_result`: "success" or "fail"
-- `auth_duration_ms`: Authentication latency
+### Pairing and Network
+- `tcp_flags`, `connection_duration`, `tcp_rtt`, `packet_rate`
+- `inter_arrival_time`, `frame_length`, `tcp_segment_len`
+- `pairing_result`, `pairing_latency_ms`
 
-### Token & Security Features (4 fields)
-- `token_id`: Authorization token identifier
-- `token_valid`: Token validity status
-- `token_expired`: Token expiration status
-- `token_scope`: Token authorization scope
+### Enrollment and Authentication
+- `credential_status`, `mqtt_msg_type`, `connect_flags`, `clean_session`
+- `username_present`, `password_present`, `username_length`, `password_length`
+- `keep_alive`, `mqtt_version`, `connack_code`, `auth_result`
+- `auth_latency_ms`, `failed_auth_count`
 
-### TLS/Transport Features (1 field)
-- `tls_enabled`: TLS security status
+### Authorization
+- `requested_topic`, `topic_length`, `operation`, `requested_qos`, `granted_qos`
+- `authorization_result`, `topic_scope_violation`, `retain_flag`
 
-### MQTT Connection Features (5 fields)
-- `mqtt_version`: Protocol version (3, 4, or 5)
-- `qos_level`: Quality of Service level
-- `mqtt_conack_val`: Connection acknowledgment code
-- `clean_session_flag`: Session restart preference
-- `keep_alive_s`: Keep-alive interval
+### MQTT Session
+- `message_id`, `duplicate_flag`, `payload_length`, `payload_hash`
+- `qos_level`, `message_rate`, `byte_rate`, `session_duration`
 
-### Topic & Authorization Features (4 fields)
-- `requested_topic`: Target MQTT topic
-- `topic`: Message topic
-- `token_scope_match`: Scope-topic alignment
-- `acl_match`: ACL enforcement result
+### Continuous Re-authentication
+- `trust_score`, `re_auth_required`, `gateway_decision`, `session_present`
+- `source_ip_change`, `replay_window_violation`, `behavior_deviation_score`
 
-### Message/Connection Metrics (6 fields)
-- `message_frequency`: Messages per second
-- `payload_size_bytes`: Message size
-- `latency_ms`: Network latency
-- `connection_duration_s`: Session duration
-- `duplicate_message_flag`: Duplicate detection
-- `message_frequency_anomaly_flag`: Abnormal frequency
-
-### Anomaly Indicators (3 fields)
-- `latency_anomaly_flag`: Abnormal latency
-- `is_anomaly`: Primary anomaly label
-- `attack_type`: "replay", "impersonation", or ""
-
-### Attack Information (1 field)
-- `attacker_type`: "non-invasive", "invasive", or ""
+### Labels
+- `lifecycle_phase`, `is_anomaly`, `attack_type`, `attack_phase`, `severity`, `attacker_type`
 
 ---
 
@@ -369,7 +350,7 @@ print(anomalies['attack_type'].value_counts())
 - **Normal events**: ~35-40 events per device
 - **Replay events**: ~15-20 events per device per attack scenario
 - **Anomaly ratio**: ~30-40% (configurable)
-- **Total features**: 34+
+- **Total features**: PDF-aligned retained feature set
 
 ---
 
