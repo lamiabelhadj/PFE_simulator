@@ -17,10 +17,10 @@ This file documents project variables, constants, and design choices that future
 | Variable / Area | Current Value | Location | Possible Future Changes |
 | --- | --- | --- | --- |
 | Device types | `sensor`, `actuator`, `gateway`, `controller` | `config/settings.yaml`, `main.py` | Add cameras, meters, wearables, industrial controllers, vehicles, or medical devices. |
-| Resource classes | `constrained`, `moderate`, `high_capability` | `config/settings.yaml`, `main.py` | Add CPU, RAM, battery, and bandwidth profiles instead of simple class labels. |
+| Resource classes | `constrained`, `moderate`, `high_capability` | `config/settings.yaml`, `main.py` | Add CPU, RAM, battery ... |
 | Identity methods | `preshared_key`, `username_password` | `config/settings.yaml`, `device.py`, `event_generator.py` | Add `certificate`, `raw_public_key`, `oauth_client_credentials`, or hardware-backed identity. |
 | Known registry status | `known_to_registry=True` for generated devices | `main.py`, `device.py` | Generate unknown/rogue devices to simulate impersonation and unauthorized enrollment. |
-| MAC address / firmware version | Present but mostly unused | `device.py` | Populate and use these fields as anomaly signals, e.g. outdated firmware or cloned MAC addresses. |
+
 
 ## Authentication and Token Variables
 
