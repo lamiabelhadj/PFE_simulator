@@ -26,7 +26,7 @@ This file documents project variables, constants, and design choices that future
 
 | Variable / Area | Current Value | Location | Possible Future Changes |
 | --- | --- | --- | --- |
-| Token expiration | `3600` seconds in config, one hour in generator | `config/settings.yaml`, `event_generator.py`, `auth_server.py` | Make all token TTLs config-driven; test short-lived tokens and refresh behavior. |
+| Token expiration | `3600` seconds  | `config/settings.yaml`, `event_generator.py`, `auth_server.py` | Make all token TTLs config-driven; test short-lived tokens and refresh behavior. |
 | Token scope | `sensors/*` | `normal_flow.py`, `event_generator.py` | Generate per-device, per-operation, or per-topic scopes. |
 | Token reuse behavior | Token has a `used` flag | `token.py`, `mqtt_broker.py`, `replay_attack.py` | Model one-time tokens, refresh tokens, token revocation, or token binding. |
 | Proof of Possession | Currently not implemented | README, future auth logic | Add PoP later to compare replay detection before and after stronger token binding. |
