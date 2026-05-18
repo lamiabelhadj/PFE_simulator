@@ -9,6 +9,7 @@ from ..models.session import Session
 from ..models.event import Event
 from .state_machine import LifecycleState, StateMachine
 from .event_generator import EventGenerator
+from ..entities.phases import default_phase_registry
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,8 @@ class FlowEngine:
         self.state_machines: dict[str, StateMachine] = {}
         self.active_tokens: dict[str, Token] = {}
         self.active_sessions: dict[str, Session] = {}
+        # Phase registry maps LifecycleState -> Phase handler
+        self.phase_registry = default_phase_registry()
     
     def register_device(self, device: Device) -> None:
         """
@@ -171,14 +174,28 @@ class FlowEngine:
                 session = s
                 break
         
-        event = self.event_generator.generate_event(
-            device=device,
-            lifecycle_phase=lifecycle_phase,
-            token=token,
-            session=session,
-            is_anomaly=is_anomaly,
-            attack_type=attack_type,
-            attacker_type=attacker_type,
-        )
+        # Delegate to the phase entity if available to allow phase-specific handling
+        phase_handler = self.phase_registry.get(lifecycle_phase)
+        if phase_handler:
+            event = phase_handler.handle(
+                engine=self,
+                device=device,
+                token=token,
+                session=session,
+                is_anomaly=is_anomaly,
+                attack_type=attack_type,
+                attacker_type=attacker_type,
+            )
+        else:
+            # Fallback to legacy generator
+            event = self.event_generator.generate_event(
+                device=device,
+                lifecycle_phase=lifecycle_phase,
+                token=token,
+                session=session,
+                is_anomaly=is_anomaly,
+                attack_type=attack_type,
+                attacker_type=attacker_type,
+            )
         
         return event

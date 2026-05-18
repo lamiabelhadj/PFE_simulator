@@ -17,6 +17,10 @@ class CSVExporter:
     FIELDNAMES = [
         # Temporal
         "timestamp",
+        "event_id",
+        "session_id",
+        "phase",
+        "event_type",
         # Identity and Discovery Features
         "device_id",
         "claimed_device_id",

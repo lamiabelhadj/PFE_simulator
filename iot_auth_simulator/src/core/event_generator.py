@@ -67,6 +67,8 @@ class EventGenerator:
 
         # Lifecycle
         event.lifecycle_phase = lifecycle_phase.value
+        event.event_id = self._event_id(device.device_id)
+        event.session_id = session.session_id if session else ""
         event.attack_type = attack_type or "normal"
         event.attack_phase = lifecycle_phase.value if is_anomaly else ""
 
@@ -80,6 +82,7 @@ class EventGenerator:
 
         if lifecycle_phase == LifecycleState.DISCOVERED:
             event.mqtt_msg_type = "DISCOVERY"
+            event.event_type = "discovery"
             if is_anomaly:
                 event.packet_rate = random.uniform(20, 80)
                 event.source_connection_count = random.randint(10, 60)
@@ -91,6 +94,7 @@ class EventGenerator:
             if is_anomaly:
                 event.pairing_latency_ms = random.uniform(800, 3000)
                 event.connection_duration = random.uniform(10, 60)
+            event.event_type = "pairing"
 
         if lifecycle_phase == LifecycleState.FAILED:
             event.auth_result = "fail"
@@ -110,6 +114,7 @@ class EventGenerator:
             event.username_length = random.randint(8, 16) if event.username_present else 0
             event.password_length = random.randint(12, 24) if event.password_present else 0
             event.connack_code = 0 if event.auth_result == "success" else random.randint(1, 5)
+            event.event_type = "authentication"
         
         # MQTT specific
         if lifecycle_phase in [
@@ -153,6 +158,8 @@ class EventGenerator:
             event.hash_method = "BLAKE2s"
             event.payload_hash = self._payload_hash(device.device_id, event.lifecycle_phase, event.payload_length)
             event.message_id = self._message_id(device.device_id)
+            if lifecycle_phase == LifecycleState.ACTIVE:
+                event.event_type = "publish"
         
         # Session information
         if session:
@@ -190,6 +197,9 @@ class EventGenerator:
     @staticmethod
     def _message_id(device_id: str) -> str:
         return f"msg_{device_id}_{random.randint(100000, 999999)}"
+    
+    def _event_id(self, device_id: str) -> str:
+        return f"evt_{device_id}_{random.randint(100000, 999999)}"
 
     def generate_normal_authentication_flow(self, device: Device) -> list[Event]:
         """

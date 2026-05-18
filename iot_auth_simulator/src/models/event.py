@@ -16,6 +16,8 @@ class Event:
     
     # Temporal
     timestamp: datetime = field(default_factory=datetime.utcnow)
+    event_id: str = ""
+    session_id: str = ""
     
     # Identity and Discovery Features
     device_id: str = ""
@@ -83,8 +85,10 @@ class Event:
     replay_window_violation: bool = False
     behavior_deviation_score: float = 0.0
     
-    # Labels
+    # Phase / Labels
     lifecycle_phase: str = ""  # DISCOVERED, PAIRED, ENROLLED, AUTHORIZED, etc.
+    phase: str = ""
+    event_type: str = ""
     is_anomaly: bool = False
     attack_type: str = "normal"
     attack_phase: str = ""
@@ -95,6 +99,9 @@ class Event:
         event_dict = asdict(self)
         # Convert datetime to ISO format string
         event_dict["timestamp"] = self.timestamp.isoformat()
+        # Keep backward-compatible keys
+        if not event_dict.get("phase") and event_dict.get("lifecycle_phase"):
+            event_dict["phase"] = event_dict.get("lifecycle_phase")
         return event_dict
     
     def __str__(self) -> str:
