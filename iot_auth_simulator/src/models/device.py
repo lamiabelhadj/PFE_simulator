@@ -18,6 +18,7 @@ class Device:
         known_to_registry: Whether device is registered in the auth server registry
         mac_address: MAC address of the device
         firmware_version: Device firmware version
+        battery_level: Battery level percentage (0-100)
         created_at: Timestamp when device was created
     """
     
@@ -28,7 +29,11 @@ class Device:
     known_to_registry: bool = True
     mac_address: str = ""
     firmware_version: str = "1.0.0"
+    battery_level: int = 100
     created_at: datetime = field(default_factory=datetime.utcnow)
     
     def __str__(self) -> str:
-        return f"Device({self.device_id}, type={self.device_type}, class={self.resource_class})"
+        return (
+            f"Device({self.device_id}, type={self.device_type}, class={self.resource_class}, "
+            f"battery={self.battery_level}%)"
+        )
