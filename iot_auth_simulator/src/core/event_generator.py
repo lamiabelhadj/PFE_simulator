@@ -75,7 +75,7 @@ class EventGenerator:
         event.packet_rate = random.uniform(0.5, 3.0)
         event.inter_arrival_time = random.uniform(0.2, 2.0)
         event.frame_length = random.randint(64, 512)
-        event.tcp_segment_len = max(0, event.frame_length - 54)
+        event.tcp_segment_length = max(0, event.frame_length - 54)
         event.connection_duration = random.uniform(0.2, 4.0)
 
         if lifecycle_phase == LifecycleState.DISCOVERED:
@@ -167,7 +167,6 @@ class EventGenerator:
         # Anomaly markers
         event.is_anomaly = is_anomaly
         event.attack_type = attack_type or "normal"
-        event.attacker_type = attacker_type
         
         if is_anomaly and attack_type == "replay":
             event.duplicate_flag = True

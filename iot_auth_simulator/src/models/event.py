@@ -33,7 +33,7 @@ class Event:
     packet_rate: float = 0.0
     inter_arrival_time: float = 0.0
     frame_length: int = 0
-    tcp_segment_len: int = 0
+    tcp_segment_length: int = 0
     pairing_result: str = ""
     pairing_latency_ms: float = 0.0
     
@@ -89,7 +89,6 @@ class Event:
     attack_type: str = "normal"
     attack_phase: str = ""
     severity: str = "low"
-    attacker_type: str = ""
     
     def to_dict(self) -> dict:
         """Convert event to dictionary for export."""

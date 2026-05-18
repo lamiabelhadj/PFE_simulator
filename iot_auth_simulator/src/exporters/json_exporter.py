@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List
 
 from ..models.event import Event
+from .csv_exporter import CSVExporter
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,11 @@ class JSONExporter:
         """
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Convert events to dictionaries
-        events_data = [event.to_dict() for event in events]
+        # Convert events to dictionaries, preserving only dataset feature fields
+        events_data = [
+            {field: event.to_dict().get(field, "") for field in CSVExporter.FIELDNAMES}
+            for event in events
+        ]
         
         with open(output_path, "w") as f:
             json.dump(events_data, f, indent=2)

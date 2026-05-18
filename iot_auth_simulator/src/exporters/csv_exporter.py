@@ -32,7 +32,7 @@ class CSVExporter:
         "packet_rate",
         "inter_arrival_time",
         "frame_length",
-        "tcp_segment_len",
+        "tcp_segment_length",
         "pairing_result",
         "pairing_latency_ms",
         # Enrollment and Authentication Features
@@ -83,7 +83,6 @@ class CSVExporter:
         "attack_type",
         "attack_phase",
         "severity",
-        "attacker_type",
     ]
     
     @staticmethod
