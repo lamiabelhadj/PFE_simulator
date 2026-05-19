@@ -1,0 +1,23 @@
+# ── Core ──────────────────────────────────────────────────────────────────────
+numpy>=1.26.0
+pandas>=2.2.0
+scipy>=1.13.0
+
+# ── Cryptography (ECDH, Blake2S, PSK simulation) ──────────────────────────────
+cryptography>=42.0.0
+
+# ── Machine Learning ──────────────────────────────────────────────────────────
+scikit-learn>=1.4.0
+
+# ── Data export ───────────────────────────────────────────────────────────────
+pyarrow>=16.0.0          # fast parquet export (optional, alongside CSV)
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+tqdm>=4.66.0             # progress bars in runner
+pyyaml>=6.0.1            # optional: load config from YAML overrides
+python-dotenv>=1.0.0     # load .env overrides for sensitive params
+
+# ── Notebook / Visualization ──────────────────────────────────────────────────
+matplotlib>=3.8.0
+seaborn>=0.13.0
+jupyterlab>=4.1.0
