@@ -8,8 +8,6 @@ Cloud-side components:
 Both live in the same module because in the simulation they share state
 (device registry, issued tokens) and are colocated in the Cloud layer.
 
-Architecture (slide 9):
-  Device → Gateway (Edge) → AuthServer / MQTTBroker (Cloud)
 """
 
 import time
