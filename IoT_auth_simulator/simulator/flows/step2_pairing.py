@@ -45,7 +45,7 @@ def run(device: Device, gateway: Gateway) -> dict:
     tcp_segment_len        = random.randint(128, 512)
 
     return {
-        # Pairing & Network features (slide 14)
+        # Pairing & Network features 
         "tcp_flags":           tcp_flags,
         "connection_duration": connection_duration_ms,
         "tcp_segment_len":     tcp_segment_len,
