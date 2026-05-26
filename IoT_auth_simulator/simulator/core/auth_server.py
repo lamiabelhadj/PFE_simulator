@@ -105,7 +105,7 @@ class AuthServer:
         if not psk_hash or len(psk_hash) < 8:
             return False, "malformed_credentials"
 
-        # Register (overwrite if re-enrolling — acceptable in simulation)
+        # Register
         self._registry[device_id] = psk_hash
         self.total_enrollments += 1
         return True, "success"
