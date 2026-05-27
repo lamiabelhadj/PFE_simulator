@@ -13,9 +13,9 @@ import argparse
 import time
 from pathlib import Path
 
-from config.settings import cfg, DATA_DIR
+from simulator.config.settings import cfg, DATA_DIR
 from simulator.runner import run_simulation
-from data.exporter import save
+from simulator.data.exporter import save
 
 
 def parse_args() -> argparse.Namespace:
