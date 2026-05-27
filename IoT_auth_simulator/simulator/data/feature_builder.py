@@ -9,7 +9,7 @@ alongside its feature payload.  This module:
   1. Renames step-metadata keys to be step-prefixed (e.g. discovery_latency_ms)
   2. Merges all step dicts — later steps win on key conflicts for feature columns
   3. Adds a session_id for traceability
-  4. Enforces the canonical column order from slides 14-15
+  4. Enforces the canonical column order 
 """
 
 import uuid
@@ -28,7 +28,7 @@ _STEP_PREFIXES = {
 # Metadata keys that should be renamed rather than kept as-is
 _META_KEYS = {"step", "step_latency_ms", "step_success"}
 
-# Final canonical column order (matches slides 14-15 + labels)
+# Final canonical column order 
 COLUMN_ORDER = [
     # Identity & Discovery
     "session_id", "device_id", "claimed_device_id", "source_ip", "gateway_id",
