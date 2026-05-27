@@ -69,7 +69,7 @@ class Device:
     credential_valid: bool          = True   # flipped by attack modules
 
     # ── Battery ──────────────────────────────────────────────────────────────
-    battery_level: float = field(
+    battery_level: int = field(
         default_factory=lambda: round(
             random.uniform(cfg.device.battery_min, cfg.device.battery_max), 1
         )
