@@ -166,15 +166,7 @@ plt.rcParams.update({
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def metric_card(label, value, sub=""):
-    sub_html = f'<div class="metric-sub">{sub}</div>' if sub else ""
-    st.markdown(
-        f"""<div class="metric-card">
-              <div class="metric-label">{label}</div>
-              <div class="metric-value">{value}</div>
-              {sub_html}
-            </div>""",
-        unsafe_allow_html=True,
-    )
+    st.metric(label=label, value=value, help=sub if sub else None)
 
 
 def icon(name, size=16, style=""):
@@ -253,14 +245,14 @@ st.markdown(
                       background:rgba(56,139,220,0.12);
                       display:flex;align-items:center;justify-content:center;
                       font-size:20px;color:#388bdc;">{icon("shield-lock", 20)}</div>
-          <h1 style="margin:0">Authentication simulator</h1>
+          <h1 style="margin:0">IoT Authentication Flows simulator</h1>
         </div>""",
     unsafe_allow_html=True,
 )
 st.markdown(
     "<p style='opacity:0.55;font-size:0.85rem;margin-bottom:1rem;'>"
     "Generate labelled IoT authentication flows — normal, replay, impersonation, "
-    "and DoS/flooding — for anomaly-detection model training.</p>",
+    "and DoS/flooding — for anomaly-detection.</p>",
     unsafe_allow_html=True,
 )
 
@@ -454,4 +446,4 @@ if "events" in st.session_state:
             file_name=csv_path.name,
             mime="text/csv",
             use_container_width=True,
-        )
+        )   
