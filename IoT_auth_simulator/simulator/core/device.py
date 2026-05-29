@@ -1,7 +1,12 @@
 """
 simulator/core/device.py
 ────────────────────────
-Represents a single IoT device in the simulation.
+Represents a     # ── Battery ──────────────────────────────────────────────────────────
+    battery_level: int = field(
+        default_factory=lambda: round(
+            random.uniform(cfg.device.battery_min, cfg.device.battery_max), 1
+        )
+    ) IoT device in the simulation.
 
 Responsibilities:
   - Holds identity (device_id, PSK, device_type, IP)
