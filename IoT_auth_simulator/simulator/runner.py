@@ -3,9 +3,11 @@ simulator/runner.py
 ────────────────────
 Orchestrator: creates devices, runs normal and attack sessions,
 and returns the full list of labelled event dicts.
+also collects temporal event metadata while preserving flat CSV output.
 """
 
 import random
+import time
 import uuid
 from typing import List, Dict, Any, Callable
 
@@ -15,6 +17,7 @@ from config.settings import cfg
 from simulator.core.device import Device
 from simulator.core.gateway import Gateway
 from simulator.core.auth_server import AuthServer, MQTTBroker
+from simulator.core.event import AuthenticationEvent
 from simulator.flows import (
     step1_discovery, step2_pairing, step3_enrollment,
     step4_authorization, step5_mqtt_session, step6_reauth,
@@ -31,10 +34,6 @@ def run_simulation(
 ) -> List[Dict[str, Any]]:
     """
     Run the full simulation and return all labelled session events.
-
-    Parameters
-    ----------
-    progress_callback : optional fn(current, total, message) for UI progress bars
 
     Returns
     -------
@@ -131,32 +130,189 @@ def _run_normal_session(
     auth_server: AuthServer,
     broker:      MQTTBroker,
 ) -> Dict[str, Any]:
+    """
+    Execute a normal (benign) authentication session and collect both the flat row
+    and internal event metadata (events are stored in _internal_events on the row).
+    
+    Returns the same flat row as before for CSV export compatibility, but enriches
+    it with a list of AuthenticationEvent objects for future temporal analysis.
+    """
+    scenario_id = str(uuid.uuid4())
+    session_start_time = time.time() * 1000  # Convert to milliseconds
+    
     step_events = []
-    step_events.append(step1_discovery.run(device, gateway))
-    step_events.append(step2_pairing.run(device, gateway))
+    events_list = []  # Collect AuthenticationEvent objects
+    previous_state = device.state.name
+    
+    # ── Step 1: Discovery ──────────────────────────────────────────────────────
+    t_step_start = time.time() * 1000
+    e1 = step1_discovery.run(device, gateway)
+    step_events.append(e1)
+    
+    event1 = AuthenticationEvent(
+        scenario_id=scenario_id,
+        event_type="discovery",
+        timestamp_ms=t_step_start,
+        device_id=device.device_id,
+        gateway_id=gateway.gateway_id,
+        auth_server_id=auth_server.server_id,
+        previous_state=previous_state,
+        new_state=device.state.name,
+        result=bool(e1.get("step_success", 0)),
+        latency_ms=e1.get("step_latency_ms", 0.0),
+        delay_since_previous_event_ms=0.0,  # First event
+        step_output=e1,
+    )
+    events_list.append(event1)
+    previous_state = device.state.name
+    
+    # ── Step 2: Pairing ────────────────────────────────────────────────────────
+    t_step_start = time.time() * 1000
+    e2 = step2_pairing.run(device, gateway)
+    step_events.append(e2)
+    
+    delay_since_prev = t_step_start - (event1.timestamp_ms + event1.latency_ms)
+    event2 = AuthenticationEvent(
+        scenario_id=scenario_id,
+        event_type="pairing",
+        timestamp_ms=t_step_start,
+        device_id=device.device_id,
+        gateway_id=gateway.gateway_id,
+        auth_server_id=auth_server.server_id,
+        previous_state=previous_state,
+        new_state=device.state.name,
+        result=bool(e2.get("step_success", 0)),
+        latency_ms=e2.get("step_latency_ms", 0.0),
+        delay_since_previous_event_ms=delay_since_prev,
+        step_output=e2,
+    )
+    events_list.append(event2)
+    previous_state = device.state.name
 
+    # ── Step 3: Enrollment ─────────────────────────────────────────────────────
+    t_step_start = time.time() * 1000
     e3 = step3_enrollment.run(device, gateway, auth_server)
     step_events.append(e3)
+    
+    delay_since_prev = t_step_start - (event2.timestamp_ms + event2.latency_ms)
+    event3 = AuthenticationEvent(
+        scenario_id=scenario_id,
+        event_type="enrollment",
+        timestamp_ms=t_step_start,
+        device_id=device.device_id,
+        gateway_id=gateway.gateway_id,
+        auth_server_id=auth_server.server_id,
+        session_id=scenario_id,  # Session now exists after enrollment
+        previous_state=previous_state,
+        new_state=device.state.name,
+        result=bool(e3.get("step_success", 0)),
+        failure_reason="enrollment_failed" if not e3.get("step_success", 0) else None,
+        latency_ms=e3.get("step_latency_ms", 0.0),
+        delay_since_previous_event_ms=delay_since_prev,
+        step_output=e3,
+    )
+    events_list.append(event3)
+    previous_state = device.state.name
 
-    if not e3["step_success"]:
-        # Enrollment failed — pad remaining steps with neutral values
+    if not e3.get("step_success", 0):
+        # Enrollment failed — pad remaining steps
         step_events += _pad_failed_steps(device)
         row = build(step_events)
-        return label_normal(row)
+        row = label_normal(row)
+        row["_internal_events"] = events_list  # Attach events for internal use
+        return row
 
+    # ── Step 4: Authorization ──────────────────────────────────────────────────
+    t_step_start = time.time() * 1000
     e4, token = step4_authorization.run(device, gateway, auth_server)
     step_events.append(e4)
+    
+    delay_since_prev = t_step_start - (event3.timestamp_ms + event3.latency_ms)
+    token_id = str(uuid.uuid4()) if token else None
+    event4 = AuthenticationEvent(
+        scenario_id=scenario_id,
+        event_type="authorization",
+        timestamp_ms=t_step_start,
+        device_id=device.device_id,
+        gateway_id=gateway.gateway_id,
+        auth_server_id=auth_server.server_id,
+        session_id=scenario_id,
+        token_id=token_id,
+        previous_state=previous_state,
+        new_state=device.state.name,
+        result=bool(e4.get("step_success", 0)),
+        failure_reason="token_request_failed" if not token else None,
+        latency_ms=e4.get("step_latency_ms", 0.0),
+        delay_since_previous_event_ms=delay_since_prev,
+        step_output=e4,
+    )
+    events_list.append(event4)
+    previous_state = device.state.name
 
     if not token:
         step_events += _pad_failed_steps(device, from_step=5)
         row = build(step_events)
-        return label_normal(row)
+        row = label_normal(row)
+        row["_internal_events"] = events_list
+        return row
 
-    step_events.append(step5_mqtt_session.run(device, gateway, auth_server, broker, token))
-    step_events.append(step6_reauth.run(device, gateway, auth_server, token))
+    # ── Step 5: MQTT Session ───────────────────────────────────────────────────
+    t_step_start = time.time() * 1000
+    e5 = step5_mqtt_session.run(device, gateway, auth_server, broker, token)
+    step_events.append(e5)
+    
+    delay_since_prev = t_step_start - (event4.timestamp_ms + event4.latency_ms)
+    event5 = AuthenticationEvent(
+        scenario_id=scenario_id,
+        event_type="mqtt_session",
+        timestamp_ms=t_step_start,
+        device_id=device.device_id,
+        gateway_id=gateway.gateway_id,
+        auth_server_id=auth_server.server_id,
+        session_id=scenario_id,
+        token_id=token_id,
+        previous_state=previous_state,
+        new_state=device.state.name,
+        result=bool(e5.get("step_success", 0)),
+        latency_ms=e5.get("step_latency_ms", 0.0),
+        delay_since_previous_event_ms=delay_since_prev,
+        step_output=e5,
+    )
+    events_list.append(event5)
+    previous_state = device.state.name
 
+    # ── Step 6: Re-authentication ──────────────────────────────────────────────
+    t_step_start = time.time() * 1000
+    e6 = step6_reauth.run(device, gateway, auth_server, token)
+    step_events.append(e6)
+    
+    delay_since_prev = t_step_start - (event5.timestamp_ms + event5.latency_ms)
+    event6 = AuthenticationEvent(
+        scenario_id=scenario_id,
+        event_type="reauth",
+        timestamp_ms=t_step_start,
+        device_id=device.device_id,
+        gateway_id=gateway.gateway_id,
+        auth_server_id=auth_server.server_id,
+        session_id=scenario_id,
+        token_id=token_id,
+        previous_state=previous_state,
+        new_state=device.state.name,
+        result=bool(e6.get("step_success", 0)),
+        latency_ms=e6.get("step_latency_ms", 0.0),
+        delay_since_previous_event_ms=delay_since_prev,
+        step_output=e6,
+    )
+    events_list.append(event6)
+    
     row = build(step_events)
-    return label_normal(row)
+    row = label_normal(row)
+    
+    # ── Attach internal events for future temporal analysis ────────────────────
+    # These are NOT included in the flat CSV but can be used for event-log export
+    row["_internal_events"] = events_list
+
+    return row
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
