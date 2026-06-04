@@ -146,8 +146,8 @@ class AuthEvent:
     """
     A single authentication event with full state, timing, and identity context.
 
-    Mandatory fields (no defaults)
-    ──────────────────────────────
+    Mandatory fields
+    ───────────────
     These form the minimum context needed to detect any of the 9 target anomalies.
     Every call site must supply them explicitly.
 
