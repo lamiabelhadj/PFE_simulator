@@ -121,8 +121,7 @@ class SessionContext:
     attributes generated alongside the AuthEvent sequence.
 
     Merged into the feature table by output_views.to_feature_df().
-    Covers all 59 features that were in the Phase 0 dataset but missing
-    from the raw AuthEvent sequence.
+    
     """
 
     # ── Identity ──────────────────────────────────────────────────────────────
@@ -219,7 +218,7 @@ class EventEngine:
     auth_server_id  : carried on every AuthEvent
     broker_id       : optional MQTT broker id
     source_ip       : device source IP (default: sampled from 10.0.1.x)
-    battery_level   : device battery % (default: uniform 5–100)
+    battery_level   : device battery % (default: uniform 0–100)
     start_time      : Unix timestamp for first event (default: now)
     """
 
@@ -239,7 +238,7 @@ class EventEngine:
         self.broker_id      = broker_id
         self.source_ip      = source_ip or f"10.0.1.{random.randint(1, 254)}"
         self.battery_level  = battery_level if battery_level is not None \
-                              else round(random.uniform(5.0, 100.0), 1)
+                              else round(random.uniform(0.0, 100.0), 1)
         self.start_time     = start_time or time.time()
 
     # ══════════════════════════════════════════════════════════════════════════
