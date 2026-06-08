@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import pandas as pd
 
 from simulator.event_model import AuthEvent, AuthState, EventResult, EventType
-from simulator.engines.event_engine import SessionContext
+from simulator.engines.event_engine import SessionContext, SEVERITY_MAP
 
 # Type alias for the two accepted input formats
 SequenceInput = Union[
@@ -136,15 +136,15 @@ def _build_row(
 
     # ── Phase 0: identity & discovery (from SessionContext or events) ─────────
     if ctx:
-        row["claimed_device_id"]       = ctx.claimed_device_id
-        row["source_ip"]               = ctx.source_ip
-        row["registered_device"]       = ctx.registered_device
-        row["source_connection_count"] = ctx.source_connection_count
-        row["source_diversity"]        = ctx.source_diversity
-        row["battery_level"]           = ctx.battery_level
+        row["claimed_device_id"]       = getattr(ctx, "claimed_device_id", first.device_id)
+        row["source_ip"]               = getattr(ctx, "source_ip", None)
+        row["registered_device"]       = getattr(ctx, "registered_device", None)
+        row["source_connection_count"] = getattr(ctx, "source_connection_count", None)
+        row["source_diversity"]        = getattr(ctx, "source_diversity", None)
+        row["battery_level"]           = getattr(ctx, "battery_level", None)
     else:
-        anomaly_evs = [e for e in events if e.anomaly_label and e.identity_claim]
-        row["claimed_device_id"] = anomaly_evs[0].identity_claim if anomaly_evs else first.device_id
+        identity_evs = [e for e in events if getattr(e, "identity_claim", None)]
+        row["claimed_device_id"] = identity_evs[0].identity_claim if identity_evs else first.device_id
         row["source_ip"]               = None
         row["registered_device"]       = None
         row["source_connection_count"] = None
@@ -153,71 +153,71 @@ def _build_row(
 
     # ── Phase 0: network / pairing ────────────────────────────────────────────
     if ctx:
-        row["tcp_flags"]           = ctx.tcp_flags
-        row["connection_duration"] = ctx.connection_duration
-        row["tcp_rtt"]             = ctx.tcp_rtt
-        row["packet_rate"]         = ctx.packet_rate
-        row["inter_arrival_time"]  = ctx.inter_arrival_time
-        row["frame_length"]        = ctx.frame_length
-        row["tcp_segment_len"]     = ctx.tcp_segment_len
-        row["pairing_result"]      = ctx.pairing_result
-        row["pairing_latency_ms"]  = ctx.pairing_latency_ms
+        row["tcp_flags"]           = getattr(ctx, "tcp_flags", None)
+        row["connection_duration"] = getattr(ctx, "connection_duration", None)
+        row["tcp_rtt"]             = getattr(ctx, "tcp_rtt", None)
+        row["packet_rate"]         = getattr(ctx, "packet_rate", None)
+        row["inter_arrival_time"]  = getattr(ctx, "inter_arrival_time", None)
+        row["frame_length"]        = getattr(ctx, "frame_length", None)
+        row["tcp_segment_len"]     = getattr(ctx, "tcp_segment_len", None)
+        row["pairing_result"]      = getattr(ctx, "pairing_result", None)
+        row["pairing_latency_ms"]  = getattr(ctx, "pairing_latency_ms", None)
 
     # ── Phase 0: enrollment & auth ────────────────────────────────────────────
     if ctx:
-        row["credential_status"]  = ctx.credential_status
-        row["mqtt_msg_type"]      = ctx.mqtt_msg_type
-        row["connect_flags"]      = ctx.connect_flags
-        row["clean_session"]      = ctx.clean_session
-        row["username_present"]   = ctx.username_present
-        row["password_length"]    = ctx.password_length
-        row["keep_alive"]         = ctx.keep_alive
-        row["mqtt_version"]       = ctx.mqtt_version
-        row["connack_code"]       = ctx.connack_code
-        row["auth_result"]        = ctx.auth_result
-        row["auth_latency_ms"]    = ctx.auth_latency_ms
-        row["failed_auth_count"]  = ctx.failed_auth_count
+        row["credential_status"]  = getattr(ctx, "credential_status", None)
+        row["mqtt_msg_type"]      = getattr(ctx, "mqtt_msg_type", None)
+        row["connect_flags"]      = getattr(ctx, "connect_flags", None)
+        row["clean_session"]      = getattr(ctx, "clean_session", None)
+        row["username_present"]   = getattr(ctx, "username_present", None)
+        row["password_length"]    = getattr(ctx, "password_length", None)
+        row["keep_alive"]         = getattr(ctx, "keep_alive", None)
+        row["mqtt_version"]       = getattr(ctx, "mqtt_version", None)
+        row["connack_code"]       = getattr(ctx, "connack_code", None)
+        row["auth_result"]        = getattr(ctx, "auth_result", None)
+        row["auth_latency_ms"]    = getattr(ctx, "auth_latency_ms", None)
+        row["failed_auth_count"]  = getattr(ctx, "failed_auth_count", None)
 
     # ── Phase 0: authorization ────────────────────────────────────────────────
     if ctx:
-        row["requested_topic"]       = ctx.requested_topic
-        row["topic_length"]          = ctx.topic_length
-        row["operation"]             = ctx.operation
-        row["requested_qos"]         = ctx.requested_qos
-        row["granted_qos"]           = ctx.granted_qos
-        row["authorization_result"]  = ctx.authorization_result
-        row["topic_scope_violation"] = ctx.topic_scope_violation
-        row["retain_flag"]           = ctx.retain_flag
+        row["requested_topic"]       = getattr(ctx, "requested_topic", None)
+        row["topic_length"]          = getattr(ctx, "topic_length", None)
+        row["operation"]             = getattr(ctx, "operation", None)
+        row["requested_qos"]         = getattr(ctx, "requested_qos", None)
+        row["granted_qos"]           = getattr(ctx, "granted_qos", None)
+        row["authorization_result"]  = getattr(ctx, "authorization_result", None)
+        row["topic_scope_violation"] = getattr(ctx, "topic_scope_violation", None)
+        row["retain_flag"]           = getattr(ctx, "retain_flag", None)
 
     # ── Phase 0: MQTT session ─────────────────────────────────────────────────
     if ctx:
-        row["message_id"]      = ctx.message_id
-        row["duplicate_flag"]  = ctx.duplicate_flag
-        row["payload_length"]  = ctx.payload_length
-        row["payload_hash"]    = ctx.payload_hash
-        row["qos_level"]       = ctx.qos_level
-        row["message_rate"]    = ctx.message_rate
-        row["byte_rate"]       = ctx.byte_rate
-        row["session_duration"] = ctx.session_duration
+        row["message_id"]      = getattr(ctx, "message_id", None)
+        row["duplicate_flag"]  = getattr(ctx, "duplicate_flag", None)
+        row["payload_length"]  = getattr(ctx, "payload_length", None)
+        row["payload_hash"]    = getattr(ctx, "payload_hash", None)
+        row["qos_level"]       = getattr(ctx, "qos_level", None)
+        row["message_rate"]    = getattr(ctx, "message_rate", None)
+        row["byte_rate"]       = getattr(ctx, "byte_rate", None)
+        row["session_duration"] = getattr(ctx, "session_duration", None)
 
     # ── Phase 0: continuous re-auth ───────────────────────────────────────────
     if ctx:
-        row["trust_score"]               = ctx.trust_score
-        row["re_auth_required"]          = ctx.re_auth_required
-        row["gateway_decision"]          = ctx.gateway_decision
-        row["session_present"]           = ctx.session_present
-        row["source_ip_change"]          = ctx.source_ip_change
-        row["replay_window_violation"]   = ctx.replay_window_violation
-        row["behavior_deviation_score"]  = ctx.behavior_deviation_score
+        row["trust_score"]               = getattr(ctx, "trust_score", None)
+        row["re_auth_required"]          = getattr(ctx, "re_auth_required", None)
+        row["gateway_decision"]          = getattr(ctx, "gateway_decision", None)
+        row["session_present"]           = getattr(ctx, "session_present", None)
+        row["source_ip_change"]          = getattr(ctx, "source_ip_change", None)
+        row["replay_window_violation"]   = getattr(ctx, "replay_window_violation", None)
+        row["behavior_deviation_score"]  = getattr(ctx, "behavior_deviation_score", None)
 
     # ── Phase 0: step latencies ───────────────────────────────────────────────
     if ctx:
-        row["s1_latency_ms"] = ctx.s1_latency_ms
-        row["s2_latency_ms"] = ctx.s2_latency_ms
-        row["s3_latency_ms"] = ctx.s3_latency_ms
-        row["s4_latency_ms"] = ctx.s4_latency_ms
-        row["s5_latency_ms"] = ctx.s5_latency_ms
-        row["s6_latency_ms"] = ctx.s6_latency_ms
+        row["s1_latency_ms"] = getattr(ctx, "s1_latency_ms", None)
+        row["s2_latency_ms"] = getattr(ctx, "s2_latency_ms", None)
+        row["s3_latency_ms"] = getattr(ctx, "s3_latency_ms", None)
+        row["s4_latency_ms"] = getattr(ctx, "s4_latency_ms", None)
+        row["s5_latency_ms"] = getattr(ctx, "s5_latency_ms", None)
+        row["s6_latency_ms"] = getattr(ctx, "s6_latency_ms", None)
 
     # ── Phase 2: temporal ─────────────────────────────────────────────────────
     delays = [e.delay_since_previous_event for e in events]
@@ -263,11 +263,23 @@ def _build_row(
     row["n_state_jumps"] = jumps
 
     # ── Labels (Phase 0 naming + Phase 2 additions) ───────────────────────────
-    anomaly_events = [e for e in events if e.anomaly_label]
-    row["is_anomaly"]   = int(bool(anomaly_events))
-    row["attack_type"]  = ctx.attack_type  if ctx else (anomaly_events[0].anomaly_label if anomaly_events else "normal")
-    row["attack_phase"] = ctx.attack_phase if ctx else (anomaly_events[0].event_type.value if anomaly_events else "none")
-    row["severity"]     = ctx.severity     if ctx else "none"
+    if ctx:
+        row["is_anomaly"]   = int(getattr(ctx, "attack_type", "normal") != "normal")
+        row["attack_type"]  = getattr(ctx, "attack_type", "normal")
+        row["attack_phase"] = getattr(ctx, "attack_phase", "none")
+        row["severity"]     = getattr(ctx, "severity", "none")
+    else:
+        attack_evs = [e for e in events if getattr(e, "anomaly_label", None) or getattr(e, "source_context", "") == "attack"]
+        row["is_anomaly"]   = int(bool(attack_evs))
+        if attack_evs:
+            row["attack_type"]  = attack_evs[0].anomaly_label if attack_evs[0].anomaly_label else "attack"
+            row["attack_phase"] = attack_evs[0].event_type.value
+            row["severity"]     = SEVERITY_MAP.get(attack_evs[0].anomaly_label, "medium") if attack_evs[0].anomaly_label else "medium"
+        else:
+            row["attack_type"]  = "normal"
+            row["attack_phase"] = "none"
+            row["severity"]     = "none"
+
     row["anomaly_type"] = row["attack_type"]   # Phase 2 alias
     row["anomaly_phase"] = row["attack_phase"]  # Phase 2 alias
 
