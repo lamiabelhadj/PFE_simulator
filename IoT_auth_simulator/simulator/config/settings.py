@@ -97,8 +97,8 @@ class DeviceConfig:
         "sensor",
         "actuator",
         "gateway_client",
-        "camera",
-        "smart_meter",
+        # "camera",
+        # "smart_meter",
     ])
 
     # Keep-alive window (seconds) for MQTT
@@ -144,7 +144,7 @@ class MQTTConfig:
     """MQTT v5 session parameters."""
 
     # Protocol version simulated
-    mqtt_version: int = 5
+    mqtt_version: List[int] = field(default_factory=lambda: [3, 4, 5])
 
     # QoS levels available
     qos_levels: List[int] = field(default_factory=lambda: [0, 1, 2])
