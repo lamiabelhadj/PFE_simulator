@@ -76,45 +76,56 @@ def run_simulation(
     victim_devices = random.sample(devices, min(20, len(devices)))
 
     for j in range(cfg.simulation.num_sessions_attack):
-        attack_type = _pick_attack_type(j, attack_counts)
-        attacker    = Device.create(
-            index=cfg.simulation.num_devices + j,
-            is_attacker=True,
-        )
-
-        # Fresh infra per attack to avoid state bleed
-        atk_gateway     = Gateway(gateway_id=str(uuid.uuid4())[:8])
-        atk_auth_server = AuthServer(server_id="auth-atk")
-        atk_broker      = MQTTBroker(broker_id="broker-atk")
-
-        if attack_type == "replay":
-            token_str = captured_tokens[token_idx % len(captured_tokens)] if captured_tokens else ""
-            token_idx += 1
-            # Register attacker in fresh auth server so enrollment works
-            atk_auth_server._registry[attacker.device_id] = attacker.get_psk_hash()
-            event = replay.run(attacker, atk_gateway, atk_auth_server, atk_broker, token_str)
-
-        elif attack_type == "impersonation":
-            victim = random.choice(victim_devices)
-            # Choose randomly between stolen and forged credentials
-            use_stolen = random.random() < 0.5
-            stolen_psk = victim.get_psk_hash() if use_stolen else None
-            atk_auth_server._registry[victim.device_id] = victim.get_psk_hash()
-            event = impersonation.run(
-                attacker, atk_gateway, atk_auth_server, atk_broker,
-                victim_device_id=victim.device_id,
-                stolen_psk_hash=stolen_psk,
+            attack_type = _pick_attack_type(j, attack_counts)
+            attacker    = Device.create(
+                index=cfg.simulation.num_devices + j,
+                is_attacker=True,
             )
 
-        else:  # dos_flooding
-            strategy = random.choice(["auth_flood", "mqtt_flood"])
-            atk_auth_server._registry[attacker.device_id] = attacker.get_psk_hash()
-            event = dos_flooding.run(attacker, atk_gateway, atk_auth_server, atk_broker, strategy)
+            # Decide infra: reuse shared gateway/auth_server for replay & impersonation
+            # (more realistic because gateway is the enforcement point). Create fresh
+            # infra only for DoS attacks to avoid polluting shared state with heavy traffic.
+            if attack_type == "dos_flooding":
+                atk_gateway     = Gateway(gateway_id=str(uuid.uuid4())[:8])
+                atk_auth_server = AuthServer(server_id="auth-atk")
+                atk_broker      = MQTTBroker(broker_id="broker-atk")
+                gw = atk_gateway
+                auth_srv = atk_auth_server
+                br = atk_broker
+            else:
+                # Reuse the shared infrastructure used by normal sessions
+                gw = gateway
+                auth_srv = auth_server
+                br = broker
 
-        events.append(event)
+            if attack_type == "replay":
+                token_str = captured_tokens[token_idx % len(captured_tokens)] if captured_tokens else ""
+                token_idx += 1
+                # Register attacker in the chosen auth server so enrollment works
+                auth_srv._registry[attacker.device_id] = attacker.get_psk_hash()
+                event = replay.run(attacker, gw, auth_srv, br, token_str)
 
-        if progress_callback:
-            progress_callback(offset + j + 1, total, f"Attack session {j+1}/{cfg.simulation.num_sessions_attack} [{attack_type}]")
+            elif attack_type == "impersonation":
+                victim = random.choice(victim_devices)
+                # Choose randomly between stolen and forged credentials
+                use_stolen = random.random() < 0.5
+                stolen_psk = victim.get_psk_hash() if use_stolen else None
+                auth_srv._registry[victim.device_id] = victim.get_psk_hash()
+                event = impersonation.run(
+                    attacker, gw, auth_srv, br,
+                    victim_device_id=victim.device_id,
+                    stolen_psk_hash=stolen_psk,
+                )
+
+            else:  # dos_flooding
+                strategy = random.choice(["auth_flood", "mqtt_flood"])
+                auth_srv._registry[attacker.device_id] = attacker.get_psk_hash()
+                event = dos_flooding.run(attacker, gw, auth_srv, br, strategy)
+
+            events.append(event)
+
+            if progress_callback:
+                progress_callback(offset + j + 1, total, f"Attack session {j+1}/{cfg.simulation.num_sessions_attack} [{attack_type}]")
 
     return events
 
