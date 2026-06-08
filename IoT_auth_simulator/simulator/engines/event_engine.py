@@ -435,6 +435,35 @@ class EventEngine:
             msg_rate   = max(0.1, random.gauss(1.0, 0.3))
             keep_alive = 60
 
+        # Choose a simulator-only MQTT message type to include in the session context.
+        mqtt_types = [
+            "CONNECT", "CONNACK", "PUBLISH", "PUBACK",
+            "SUBSCRIBE", "SUBACK", "UNSUBSCRIBE", "UNSUBACK",
+            "PINGREQ", "PINGRESP", "DISCONNECT", "AUTH",
+        ]
+        # bias towards PUBLISH for normal traffic and towards PUBLISH/CONNECT for attacks
+        if is_attack:
+            weights = [1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 2, 1]
+        else:
+            weights = [2, 1, 6, 1, 1, 1, 1, 1, 1, 1, 1, 0.5]
+        mqtt_msg_type = random.choices(mqtt_types, weights, k=1)[0]
+
+        # sensible defaults per message type (values stored in SessionContext must exist)
+        if mqtt_msg_type == "CONNECT":
+            connect_flags = 0xC2
+            clean_session = 1
+            username_present = 1
+            password_length = 64
+        else:
+            # non-CONNECT types do not carry connect-specific fields
+            connect_flags = 0
+            clean_session = 0
+            username_present = 0
+            password_length = 0
+
+        # operation describes intended usage of the session; for PUBLISH prefer "publish"
+        operation = "publish" if mqtt_msg_type == "PUBLISH" else "pub_sub"
+
         session_dur = max(0.0, events[-1].timestamp - events[0].timestamp)
         byte_rate   = round((msg_rate * payload_size), 2)
 
@@ -489,13 +518,13 @@ class EventEngine:
             tcp_segment_len         = seg_len,
             pairing_result          = 1 if not is_attack else 0,
             pairing_latency_ms      = ctx["pairing_latency_ms"],
-            # Auth
+            # Auth / MQTT
             credential_status       = ctx["credential_status"],
-            mqtt_msg_type           = "CONNECT",
-            connect_flags           = 0xC2,
-            clean_session           = 1,
-            username_present        = 1,
-            password_length         = 64,
+            mqtt_msg_type           = mqtt_msg_type,
+            connect_flags           = connect_flags,
+            clean_session           = clean_session,
+            username_present        = username_present,
+            password_length         = password_length,
             keep_alive              = keep_alive,
             mqtt_version            = 5,
             connack_code            = ctx["connack_code"],
@@ -505,17 +534,17 @@ class EventEngine:
             # Authorization
             requested_topic         = topic,
             topic_length            = len(topic),
-            operation               = "pub_sub",
+            operation               = operation,
             requested_qos           = qos_level,
             granted_qos             = qos_level,
             authorization_result    = ctx["authorization_result"],
             topic_scope_violation   = ctx["topic_scope_violation"],
-            retain_flag             = 0,
+            retain_flag             = 1 if mqtt_msg_type == "PUBLISH" and random.random() < 0.1 else 0,
             # MQTT session
             message_id              = random.randint(1, 65535),
             duplicate_flag          = 0,
-            payload_length          = payload_size,
-            payload_hash            = payload_hash,
+            payload_length          = payload_size if mqtt_msg_type == "PUBLISH" else 0,
+            payload_hash            = payload_hash if mqtt_msg_type == "PUBLISH" else "",
             qos_level               = qos_level,
             message_rate            = round(msg_rate, 3),
             byte_rate               = byte_rate,
