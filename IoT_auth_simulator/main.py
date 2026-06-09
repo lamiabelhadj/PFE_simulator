@@ -20,15 +20,15 @@ from simulator.data.exporter import save
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="IoT Auth Simulator")
-    p.add_argument("--normal", type=int,  default=cfg.simulation.num_sessions_normal,
+    p.add_argument("--normal",  type=int,  default=cfg.simulation.num_sessions_normal,
                    help="Number of normal sessions")
-    p.add_argument("--attack", type=int,  default=cfg.simulation.num_sessions_attack,
+    p.add_argument("--attack",  type=int,  default=cfg.simulation.num_sessions_attack,
                    help="Number of attack sessions")
-    p.add_argument("--devices", type=int, default=cfg.simulation.num_devices,
+    p.add_argument("--devices", type=int,  default=cfg.simulation.num_devices,
                    help="Size of the device pool")
-    p.add_argument("--seed",   type=int,  default=cfg.simulation.random_seed,
+    p.add_argument("--seed",    type=int,  default=cfg.simulation.random_seed,
                    help="Random seed for reproducibility")
-    p.add_argument("--out",    type=str,  default=cfg.simulation.output_filename,
+    p.add_argument("--out",     type=str,  default=cfg.simulation.output_filename,
                    help="Output CSV filename")
     p.add_argument("--parquet", action="store_true",
                    help="Also save a Parquet copy")
@@ -63,29 +63,29 @@ def main() -> None:
         bar = "█" * pct + "░" * (40 - pct)
         print(f"\r  [{bar}] {current}/{total}  {msg}          ", end="", flush=True)
 
-    events = run_simulation(progress_callback=progress)
+    sequences = run_simulation(progress_callback=progress)
     print()
 
-    csv_path = save(events, filename=args.out, parquet=args.parquet)
+    csv_path = save(sequences, filename=args.out, parquet=args.parquet)
 
     elapsed = time.time() - t0
-    total   = len(events)
-    normal  = sum(1 for e in events if e.get("is_anomaly") == 0)
+    total   = len(sequences)
+    normal  = sum(1 for _, ctx in sequences if ctx.attack_type == "normal")
     attack  = total - normal
 
     print()
     print("=" * 60)
     print(f"  Done in {elapsed:.1f}s")
-    print(f"  Total rows : {total:,}")
-    print(f"  Normal     : {normal:,}  ({normal/total*100:.1f}%)")
-    print(f"  Attack     : {attack:,}  ({attack/total*100:.1f}%)")
-    attack_types = {}
-    for e in events:
-        t = e.get("attack_type", "normal")
+    print(f"  Total sessions : {total:,}")
+    print(f"  Normal         : {normal:,}  ({normal / total * 100:.1f}%)")
+    print(f"  Attack         : {attack:,}  ({attack / total * 100:.1f}%)")
+    attack_types: dict = {}
+    for _, ctx in sequences:
+        t = ctx.attack_type
         attack_types[t] = attack_types.get(t, 0) + 1
     for t, c in sorted(attack_types.items()):
         print(f"    {t:<20}: {c:,}")
-    print(f"  Dataset    : {csv_path}")
+    print(f"  Dataset        : {csv_path}")
     print("=" * 60)
 
 

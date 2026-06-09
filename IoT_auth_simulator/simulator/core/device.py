@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 )
 from cryptography.hazmat.backends import default_backend
 
-from config.settings import cfg
+from simulator.config.settings import cfg
 
 
 # ── Device lifecycle states ────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ class DeviceState(Enum):
     ENROLLING     = auto()   # Step 3 — PSK enrollment
     AUTHORIZING   = auto()   # Step 4 — token request
     SESSION_OPEN  = auto()   # Step 5 — MQTT session active
-    REAUTHENTCNG  = auto()   # Step 6 — token revalidation
+    REAUTHENTICATING = auto()   # Step 6 — token revalidation
     COMPLETED     = auto()   # clean session end
     FAILED        = auto()   # auth failure / anomaly detected
     ATTACKING     = auto()   # device is executing an attack

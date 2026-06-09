@@ -69,7 +69,6 @@ DELAY_PROFILE_NORMAL: Dict[EventType, Tuple[float, float]] = {
     EventType.RETRY:                  (1.0,  0.5),
     EventType.TIMEOUT:                (30.0, 5.0),
     EventType.DISCONNECT:             (5.0,  2.0),
-    EventType.NONCE_RECEIVED:         (0.15, 0.05),
 }
 
 DELAY_PROFILE_ATTACK: Dict[EventType, Tuple[float, float]] = {

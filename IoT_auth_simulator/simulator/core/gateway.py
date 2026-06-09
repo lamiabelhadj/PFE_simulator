@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 )
 from cryptography.hazmat.backends import default_backend
 
-from config.settings import cfg
+from simulator.config.settings import cfg
 
 
 # ── Per-device session record held by the gateway ─────────────────────────────

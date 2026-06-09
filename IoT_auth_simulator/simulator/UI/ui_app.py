@@ -11,15 +11,14 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import seaborn as sns
 
-from config.settings import cfg, DATA_DIR
+from simulator.config.settings import cfg, DATA_DIR
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -286,24 +285,25 @@ if run_btn:
     status_text  = st.empty()
 
     from simulator.runner import run_simulation
-    from data.exporter import save
+    from simulator.data.exporter import save
+    from simulator.data.output_views import to_feature_df
 
     def ui_progress(current, total, msg):
         progress_bar.progress(min(current / total, 1.0))
         status_text.text(msg)
 
-    t0      = time.time()
-    events  = run_simulation(progress_callback=ui_progress)
-    elapsed = time.time() - t0
+    t0        = time.time()
+    sequences = run_simulation(progress_callback=ui_progress)
+    elapsed   = time.time() - t0
 
     progress_bar.progress(1.0)
     status_text.empty()
 
-    csv_path = save(events, filename=out_name, parquet=save_parquet)
+    csv_path = save(sequences, filename=out_name, parquet=save_parquet)
 
     st.success(f"Completed in {elapsed:.1f}s — dataset saved to `{csv_path}`")
 
-    st.session_state["events"]   = events
+    st.session_state["df"]       = to_feature_df(sequences)
     st.session_state["csv_path"] = csv_path
     st.session_state["elapsed"]  = elapsed
 
@@ -311,11 +311,10 @@ if run_btn:
 # ══════════════════════════════════════════════════════════════════════════════
 # Dashboard
 # ══════════════════════════════════════════════════════════════════════════════
-if "events" in st.session_state:
-    events   = st.session_state["events"]
+if "df" in st.session_state:
+    df       = st.session_state["df"]
     csv_path = Path(st.session_state["csv_path"])
     elapsed  = st.session_state["elapsed"]
-    df       = pd.DataFrame(events)
 
     st.markdown(
         f'<h2 style="margin:0 0 0.75rem;">'

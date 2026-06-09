@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
-from config.settings import cfg
+from simulator.config.settings import cfg
 
 
 # ══════════════════════════════════════════════════════════════════════════════

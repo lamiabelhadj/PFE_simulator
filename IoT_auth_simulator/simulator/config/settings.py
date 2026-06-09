@@ -42,6 +42,9 @@ class SimulationConfig:
         "dos_flooding":   0.30,
     })
 
+    # Gateway pool size
+    num_gateways: int = 5
+
     # Output
     output_filename: str = "iot_auth_dataset.csv"
 
@@ -86,8 +89,8 @@ class DeviceConfig:
     """Parameters that characterise an IoT device."""
 
     # Battery level range (%)
-    battery_min: int = 5.0
-    battery_max: int = 100.0
+    battery_min: float = 5.0
+    battery_max: float = 100.0
 
     # PSK (pre-shared key) byte length
     psk_length_bytes: int = 32
