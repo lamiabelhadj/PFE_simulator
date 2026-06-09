@@ -71,6 +71,53 @@ NORMAL_FLOW: List[EventType] = [
     EventType.SESSION_CLOSED,
 ]
 
+# Normal flow variant: one auth failure followed by a successful retry.
+# AUTH_FAILED → RETRY (backoff) → re-enter challenge-response → success.
+NORMAL_FLOW_WITH_RETRY: List[EventType] = [
+    EventType.REGISTRATION_REQUEST,
+    EventType.REGISTRATION_CONFIRMED,
+    EventType.AUTHENTICATION_REQUEST,
+    EventType.CHALLENGE_SENT,
+    EventType.NONCE_RECEIVED,
+    EventType.RESPONSE_SENT,
+    EventType.AUTHENTICATION_FAILURE,   # first attempt fails
+    EventType.RETRY,                    # device waits (backoff) and retries
+    EventType.CHALLENGE_SENT,           # new challenge issued
+    EventType.NONCE_RECEIVED,
+    EventType.RESPONSE_SENT,
+    EventType.AUTHENTICATION_SUCCESS,   # second attempt succeeds
+    EventType.TOKEN_ISSUED,
+    EventType.TOKEN_PRESENTED,
+    EventType.TOKEN_VALIDATED,
+    EventType.SESSION_OPENED,
+    EventType.ACCESS_REQUEST,
+    EventType.ACCESS_GRANTED,
+    EventType.SESSION_CLOSED,
+]
+
+# Normal flow variant: token renewal mid-session.
+# After first access, token nears expiry → RENEWAL_REQUEST → new TOKEN_ISSUED.
+NORMAL_FLOW_WITH_RENEWAL: List[EventType] = [
+    EventType.REGISTRATION_REQUEST,
+    EventType.REGISTRATION_CONFIRMED,
+    EventType.AUTHENTICATION_REQUEST,
+    EventType.CHALLENGE_SENT,
+    EventType.NONCE_RECEIVED,
+    EventType.RESPONSE_SENT,
+    EventType.AUTHENTICATION_SUCCESS,
+    EventType.TOKEN_ISSUED,
+    EventType.TOKEN_PRESENTED,
+    EventType.TOKEN_VALIDATED,
+    EventType.SESSION_OPENED,
+    EventType.ACCESS_REQUEST,
+    EventType.ACCESS_GRANTED,
+    EventType.RENEWAL_REQUEST,          # token nearing expiry, device renews
+    EventType.TOKEN_ISSUED,             # fresh token issued by auth server
+    EventType.TOKEN_PRESENTED,
+    EventType.TOKEN_VALIDATED,
+    EventType.SESSION_CLOSED,
+]
+
 # ── State checkpoints within NORMAL_FLOW ─────────────────────────────────────
 # Maps EventType → the AuthState the SM will be in AFTER that event fires.
 # Used by the scenario engine to pick a sensible injection_position.
@@ -170,12 +217,40 @@ class ScenarioEngine:
     # ── Single scenario factories ──────────────────────────────────────────────
 
     def normal(self) -> ScenarioSpec:
-        """Generate one normal (benign) scenario spec."""
+        """Generate one normal (benign) scenario spec — pure happy path."""
         return ScenarioSpec(
             scenario_id   = str(uuid.uuid4()),
             scenario_type = "normal",
             is_anomaly    = False,
             normal_steps  = list(NORMAL_FLOW),
+        )
+
+    def normal_with_retry(self) -> ScenarioSpec:
+        """
+        Normal session that recovers from one authentication failure.
+
+        Produces non-zero values for: failed_auth_count, n_authentication_failure,
+        n_retry, auth_latency_ms (second attempt).
+        """
+        return ScenarioSpec(
+            scenario_id   = str(uuid.uuid4()),
+            scenario_type = "normal",
+            is_anomaly    = False,
+            normal_steps  = list(NORMAL_FLOW_WITH_RETRY),
+        )
+
+    def normal_with_renewal(self) -> ScenarioSpec:
+        """
+        Normal session that performs a mid-session token renewal.
+
+        Produces non-zero values for: re_auth_required, n_renewal_request,
+        s6_latency_ms, n_token_issued (= 2).
+        """
+        return ScenarioSpec(
+            scenario_id   = str(uuid.uuid4()),
+            scenario_type = "normal",
+            is_anomaly    = False,
+            normal_steps  = list(NORMAL_FLOW_WITH_RENEWAL),
         )
 
     def anomaly(self, anomaly_type: str) -> ScenarioSpec:
@@ -217,15 +292,22 @@ class ScenarioEngine:
         n_normal:     int,
         n_attack:     int,
         distribution: Dict[str, float],
+        retry_ratio:   float = 0.20,
+        renewal_ratio: float = 0.15,
     ) -> List[ScenarioSpec]:
         """
         Generate a mixed list of normal + anomaly specs in random order.
 
         Parameters
         ----------
-        n_normal     : number of normal sessions
-        n_attack     : total attack sessions
-        distribution : {anomaly_type: fraction} — must sum to 1.0
+        n_normal      : total normal sessions
+        n_attack      : total attack sessions
+        distribution  : {anomaly_type: fraction} — must sum to 1.0
+        retry_ratio   : fraction of normal sessions that use the retry flow
+        renewal_ratio : fraction of normal sessions that use the renewal flow
+
+        The remaining normal sessions use the pure happy-path flow.
+        retry_ratio + renewal_ratio must be <= 1.0.
 
         Returns
         -------
@@ -233,12 +315,22 @@ class ScenarioEngine:
         """
         if abs(sum(distribution.values()) - 1.0) > 1e-6:
             raise ValueError("attack distribution must sum to 1.0")
+        if retry_ratio + renewal_ratio > 1.0:
+            raise ValueError("retry_ratio + renewal_ratio must be <= 1.0")
 
         specs: List[ScenarioSpec] = []
 
-        # Normal
-        for _ in range(n_normal):
+        # Normal — split into three sub-types
+        n_retry   = int(n_normal * retry_ratio)
+        n_renewal = int(n_normal * renewal_ratio)
+        n_pure    = n_normal - n_retry - n_renewal
+
+        for _ in range(n_pure):
             specs.append(self.normal())
+        for _ in range(n_retry):
+            specs.append(self.normal_with_retry())
+        for _ in range(n_renewal):
+            specs.append(self.normal_with_renewal())
 
         # Attack — split by distribution
         counts = self._split_counts(n_attack, distribution)

@@ -29,6 +29,7 @@ from typing import Dict, List, Optional, Tuple
 from simulator.event_model import AuthEvent, AuthState, EventResult, EventType
 from simulator.state_machine import StateMachine, TransitionError
 from simulator.engines.scenario_engine import ScenarioSpec
+from simulator.engines.temporal_engine import TemporalEngine, TemporalConfig
 
 
 # ── Severity map ──────────────────────────────────────────────────────────────
@@ -265,22 +266,29 @@ class EventEngine:
         is_attack  = spec.is_anomaly
         profile    = DELAY_PROFILE_ATTACK if is_attack else DELAY_PROFILE_NORMAL
 
+        # Phase 3 — temporal tracker for this session
+        te = TemporalEngine(config=TemporalConfig(), is_attack=is_attack)
+
         # ── Accumulators for SessionContext ───────────────────────────────────
         ctx: Dict = {
             "s1_latency_ms": 0.0, "s2_latency_ms": 0.0,
             "s3_latency_ms": 0.0, "s4_latency_ms": 0.0,
             "s5_latency_ms": 0.0, "s6_latency_ms": 0.0,
-            "auth_latency_ms":   0.0,
-            "pairing_latency_ms": 0.0,
-            "auth_result":        0,
-            "credential_status":  1,
-            "connack_code":       "pending",
-            "failed_auth_count":  0,
-            "authorization_result": 0,
+            "auth_latency_ms":       0.0,
+            "pairing_latency_ms":    0.0,
+            "auth_result":           0,
+            "final_auth_result":     0,   # set by last AUTH_SUCCESS seen
+            "credential_status":     1,
+            "connack_code":          "pending",
+            "failed_auth_count":     0,
+            "authorization_result":  0,
             "topic_scope_violation": 0,
-            "re_auth_required":   0,
-            "source_ip_change":   0,
-            "session_present":    0,
+            "re_auth_required":      0,
+            "source_ip_change":      0,
+            "session_present":       0,
+            "replay_window_violation": 0,
+            # retry tracking
+            "n_retries_fired":       0,
         }
 
         # ── Run normal steps ──────────────────────────────────────────────────
@@ -290,7 +298,11 @@ class EventEngine:
         )
 
         for event_type in steps_to_run:
-            delay      = self._sample_delay(event_type, profile)
+            # Phase 3: use retry backoff delay for RETRY events
+            if event_type == EventType.RETRY:
+                delay = te.next_retry_delay()
+            else:
+                delay = self._sample_delay(event_type, profile)
             current_ts = current_ts + delay
             prev_state = sm.state
             result, failure_reason = self._outcome(event_type, is_anomaly=False)
@@ -305,27 +317,40 @@ class EventEngine:
             # ── Update shared token/nonce context ─────────────────────────────
             if event_type == EventType.TOKEN_ISSUED:
                 token_id = str(uuid.uuid4())
+                te.record_token_issued(current_ts)       # Phase 3
+            if event_type == EventType.TOKEN_PRESENTED:
+                te.record_token_presented(current_ts)    # Phase 3
             if event_type == EventType.CHALLENGE_SENT:
                 nonce = hashlib.blake2s(uuid.uuid4().bytes).hexdigest()[:16]
+                te.record_nonce_issued(current_ts)       # Phase 3
             if event_type in {EventType.AUTHENTICATION_FAILURE, EventType.TOKEN_REJECTED}:
                 retry_count          += 1
                 ctx["failed_auth_count"] += 1
+                te.record_failure()                      # Phase 3
+            if event_type == EventType.RETRY:
+                ctx["n_retries_fired"] += 1
 
             # ── Capture step latencies ────────────────────────────────────────
             delay_ms = delay * 1000
             if event_type == EventType.REGISTRATION_REQUEST:
                 ctx["s1_latency_ms"] = round(delay_ms, 2)
-            elif event_type == EventType.CHALLENGE_SENT:
+            elif event_type == EventType.CHALLENGE_SENT and ctx["s2_latency_ms"] == 0.0:
+                # capture only the first challenge (retry scenario has two)
                 ctx["s2_latency_ms"]      = round(delay_ms, 2)
                 ctx["pairing_latency_ms"] = round(delay_ms, 2)
-            elif event_type in {EventType.AUTHENTICATION_SUCCESS,
-                                 EventType.AUTHENTICATION_FAILURE}:
-                ctx["s3_latency_ms"]   = round(delay_ms, 2)
-                ctx["auth_latency_ms"] = round(delay_ms, 2)
-                ctx["auth_result"]     = 1 if event_type == EventType.AUTHENTICATION_SUCCESS else 0
-                ctx["connack_code"]    = "success" if ctx["auth_result"] else failure_reason or "auth_failure"
-                ctx["credential_status"] = 1 if ctx["auth_result"] else 0
-            elif event_type == EventType.TOKEN_ISSUED:
+            elif event_type == EventType.AUTHENTICATION_SUCCESS:
+                ctx["s3_latency_ms"]      = round(delay_ms, 2)
+                ctx["auth_latency_ms"]    = round(delay_ms, 2)
+                ctx["final_auth_result"]  = 1
+                ctx["connack_code"]       = "success"
+                ctx["credential_status"]  = 1
+            elif event_type == EventType.AUTHENTICATION_FAILURE:
+                # Only update s3 if we haven't succeeded yet
+                if ctx["final_auth_result"] == 0:
+                    ctx["s3_latency_ms"]   = round(delay_ms, 2)
+                    ctx["auth_latency_ms"] = round(delay_ms, 2)
+                ctx["connack_code"] = failure_reason or "auth_failure"
+            elif event_type == EventType.TOKEN_ISSUED and ctx["s4_latency_ms"] == 0.0:
                 ctx["s4_latency_ms"] = round(delay_ms, 2)
             elif event_type == EventType.SESSION_OPENED:
                 ctx["s5_latency_ms"]        = round(delay_ms, 2)
@@ -334,6 +359,7 @@ class EventEngine:
             elif event_type == EventType.RENEWAL_REQUEST:
                 ctx["s6_latency_ms"]    = round(delay_ms, 2)
                 ctx["re_auth_required"] = 1
+                te.record_renewal(current_ts)            # Phase 3: reset token clock
             elif event_type == EventType.ACCESS_DENIED:
                 ctx["topic_scope_violation"] = 1 if random.random() < 0.3 else 0
 
@@ -349,6 +375,9 @@ class EventEngine:
             )
             events.append(ev)
 
+        # ── Set final auth_result from accumulated state ───────────────────────
+        ctx["auth_result"] = ctx["final_auth_result"]
+
         # ── Anomaly injection ─────────────────────────────────────────────────
         if spec.is_anomaly:
             delay      = self._sample_delay(spec.injection_event, profile)
@@ -356,6 +385,15 @@ class EventEngine:
 
             if spec.anomaly_type == "timestamp_inconsistency":
                 current_ts = current_ts - random.uniform(400, 900)
+
+            # Phase 3: for replay_token, simulate a token presented well outside
+            # the allowed window so is_replay_violation() returns True
+            if spec.anomaly_type == "replay_token":
+                te.record_token_issued(current_ts - random.uniform(120, 600))
+                te.record_token_presented(current_ts)
+                ctx["replay_window_violation"] = int(te.is_replay_violation(current_ts))
+                if ctx["replay_window_violation"] == 0:
+                    ctx["replay_window_violation"] = 1   # force True for labelled replay
 
             prev_state = sm.state
             sm.force(spec.injection_from_state)
@@ -384,14 +422,13 @@ class EventEngine:
                 timestamp=current_ts, delay=delay, retry_count=retry_count,
                 token_id=token_id if spec.injection_event in TOKEN_CARRYING_EVENTS else None,
                 nonce=nonce if spec.injection_event in NONCE_CARRYING_EVENTS else None,
-                anomaly_label=None,
+                anomaly_label=spec.anomaly_type,
                 identity_claim=identity_claim,
-                source_context = "attack" if is_attack else "normal",
             )
             events.append(ev)
 
         # ── Build SessionContext ───────────────────────────────────────────────
-        context = self._build_context(spec, events, ctx)
+        context = self._build_context(spec, events, ctx, te)
         return events, context
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -403,22 +440,24 @@ class EventEngine:
         spec:   ScenarioSpec,
         events: List[AuthEvent],
         ctx:    Dict,
+        te:     Optional["TemporalEngine"] = None,
     ) -> SessionContext:
         is_attack   = spec.is_anomaly
-        attack_type = "attack" if is_attack else "normal"
+        # Phase 3 fix: use the actual anomaly label, not a generic "attack" string
+        attack_type = spec.anomaly_type if is_attack else "normal"
 
         # ── Network features ──────────────────────────────────────────────────
         if is_attack:
-            # tcp_rtt    = max(1.0, random.gauss(8.0,  30.0))
+            tcp_rtt    = max(1.0, random.gauss(8.0,  30.0))
             pkt_rate   = max(1.0, random.gauss(350.0, 80.0))
         else:
-            # tcp_rtt    = max(1.0, random.gauss(20.0, 5.0))
+            tcp_rtt    = max(1.0, random.gauss(20.0, 5.0))
             pkt_rate   = max(0.1, random.gauss(5.0,  1.5))
 
         inter_arrival = round(1000.0 / pkt_rate, 2)
         frame_len     = random.randint(64, 256)
-        # seg_len       = random.randint(128, 512)
-        # conn_duration = round((events[-1].timestamp - events[0].timestamp) * 1000, 2)
+        seg_len       = random.randint(128, 512)
+        conn_duration = round((events[-1].timestamp - events[0].timestamp) * 1000, 2)
 
         # ── MQTT features ─────────────────────────────────────────────────────
         qos_level    = random.choice([0, 1, 2])
@@ -431,48 +470,48 @@ class EventEngine:
         payload_hash   = hashlib.blake2s(payload_sample).hexdigest()
 
         if is_attack:
-            msg_rate = max(1.0, random.gauss(350.0, 80.0))
+            msg_rate   = max(1.0, random.gauss(350.0, 80.0))
             keep_alive = 10
         else:
             msg_rate   = max(0.1, random.gauss(1.0, 0.3))
             keep_alive = 60
 
-        # Choose a simulator-only MQTT message type to include in the session context.
+        byte_rate = round(msg_rate * payload_size, 2)
+
         mqtt_types = [
             "CONNECT", "CONNACK", "PUBLISH", "PUBACK",
             "SUBSCRIBE", "SUBACK", "UNSUBSCRIBE", "UNSUBACK",
             "PINGREQ", "PINGRESP", "DISCONNECT", "AUTH",
         ]
-        # bias towards PUBLISH for normal traffic and towards PUBLISH/CONNECT for attacks
         if is_attack:
             weights = [1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 2, 1]
         else:
             weights = [2, 1, 6, 1, 1, 1, 1, 1, 1, 1, 1, 0.5]
         mqtt_msg_type = random.choices(mqtt_types, weights, k=1)[0]
 
-        # sensible defaults per message type (values stored in SessionContext must exist)
         if mqtt_msg_type == "CONNECT":
-            # connect_flags = 0xC2
-            clean_session = 1
-            # username_present = 1
-            # password_length = 64
+            connect_flags    = 0xC2
+            clean_session    = 1
+            username_present = 1
+            password_length  = 64
         else:
-            # non-CONNECT types do not carry connect-specific fields
-            # connect_flags = 0
-            clean_session = 0
-            # username_present = 0
-            # password_length = 0
+            connect_flags    = 0
+            clean_session    = 0
+            username_present = 0
+            password_length  = 0
 
-        # operation describes intended usage of the session; for PUBLISH prefer "publish"
         operation = "publish" if mqtt_msg_type == "PUBLISH" else "pub_sub"
 
         session_dur = max(0.0, events[-1].timestamp - events[0].timestamp)
-        # byte_rate   = round((msg_rate * payload_size), 2)
 
-        # ── Trust score (degrades with failures) ──────────────────────────────
-        trust = max(0.0, 0.8 - ctx["failed_auth_count"] * 0.15)
-        # replay window violation not tracked as a specific anomaly anymore
-        replay_viol = 0
+        # ── Trust score (degrades with failures, recovers with renewals) ────────
+        renewals = te.renewal_count if te else 0
+        trust = max(0.0, min(1.0,
+            0.8
+            - ctx["failed_auth_count"] * 0.15
+            + renewals * 0.05          # each renewal slightly restores trust
+        ))
+        replay_viol = ctx.get("replay_window_violation", 0)
         behavior_dev = round(
             (1.0 - trust)
             + 0.3 * ctx["source_ip_change"]
@@ -485,14 +524,17 @@ class EventEngine:
             gw_decision = "reauth_required"
         elif ctx["source_ip_change"]:
             gw_decision = "ip_change_detected"
+        elif replay_viol:
+            gw_decision = "replay_detected"
         else:
             gw_decision = "session_valid"
 
         # ── Claimed device id ─────────────────────────────────────────────────
         claimed_id = ctx.get("identity_claim", self.device_id)
 
-        # ── Attack labels ─────────────────────────────────────────────────────
+        # ── Attack labels (Phase 3 fix: correct type + SEVERITY_MAP) ──────────
         attack_phase = spec.injection_event.value if is_attack else "none"
+        severity     = SEVERITY_MAP.get(spec.anomaly_type, "none") if is_attack else "none"
 
         return SessionContext(
             # Identity
@@ -504,22 +546,22 @@ class EventEngine:
             battery_level           = self.battery_level,
             # Network
             tcp_flags               = "SYN,ACK" if not is_attack else "SYN",
-            # connection_duration     = conn_duration,
-            # tcp_rtt                 = round(tcp_rtt, 2),
+            connection_duration     = conn_duration,
+            tcp_rtt                 = round(tcp_rtt, 2),
             packet_rate             = round(pkt_rate, 3),
             inter_arrival_time      = inter_arrival,
             frame_length            = frame_len,
-            # tcp_segment_len         = seg_len,
+            tcp_segment_len         = seg_len,
             pairing_result          = 1 if not is_attack else 0,
             pairing_latency_ms      = ctx["pairing_latency_ms"],
             # Auth / MQTT
             credential_status       = ctx["credential_status"],
             mqtt_msg_type           = mqtt_msg_type,
-            # connect_flags           = connect_flags,
+            connect_flags           = connect_flags,
             clean_session           = clean_session,
-            # username_present        = username_present,
-            # password_length         = password_length,
-            # keep_alive              = keep_alive,
+            username_present        = username_present,
+            password_length         = password_length,
+            keep_alive              = keep_alive,
             mqtt_version            = 5,
             connack_code            = ctx["connack_code"],
             auth_result             = ctx["auth_result"],
@@ -527,9 +569,9 @@ class EventEngine:
             failed_auth_count       = ctx["failed_auth_count"],
             # Authorization
             requested_topic         = topic,
-            # topic_length            = len(topic),
+            topic_length            = len(topic),
             operation               = operation,
-            # requested_qos           = qos_level,
+            requested_qos           = qos_level,
             granted_qos             = qos_level,
             authorization_result    = ctx["authorization_result"],
             topic_scope_violation   = ctx["topic_scope_violation"],
@@ -539,9 +581,9 @@ class EventEngine:
             duplicate_flag          = 0,
             payload_length          = payload_size if mqtt_msg_type == "PUBLISH" else 0,
             payload_hash            = payload_hash if mqtt_msg_type == "PUBLISH" else "",
-            # qos_level               = qos_level,
+            qos_level               = qos_level,
             message_rate            = round(msg_rate, 3),
-            # byte_rate               = byte_rate,
+            byte_rate               = byte_rate,
             session_duration        = round(session_dur, 3),
             # Re-auth
             trust_score             = round(trust, 3),
@@ -561,7 +603,7 @@ class EventEngine:
             # Labels
             attack_type             = attack_type,
             attack_phase            = attack_phase,
-            severity                = "medium" if is_attack else "none",
+            severity                = severity,
         )
 
     # ══════════════════════════════════════════════════════════════════════════
