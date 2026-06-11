@@ -253,6 +253,38 @@ class ScenarioEngine:
             normal_steps  = list(NORMAL_FLOW_WITH_RENEWAL),
         )
 
+    # ── Phase 4: named replay variant factories ───────────────────────────────
+
+    def replay_token(self) -> ScenarioSpec:
+        """Old token replayed outside the replay window. Produces token_age_at_replay > 0."""
+        return self.anomaly("replay_token")
+
+    def nonce_reuse(self) -> ScenarioSpec:
+        """Same nonce re-sent after the challenge window. Produces nonce_age_at_reuse > 0."""
+        return self.anomaly("nonce_reuse")
+
+    def timestamp_inconsistency(self) -> ScenarioSpec:
+        """Response arrives before the challenge. Produces timestamp_delta_s > 0."""
+        return self.anomaly("timestamp_inconsistency")
+
+    def duplicate_sequence(self) -> ScenarioSpec:
+        """Full auth sequence replayed inside an open session. Produces duplicate_session_count=1."""
+        return self.anomaly("duplicate_sequence")
+
+    def replay_variants_batch(self, n_each: int = 25) -> List[ScenarioSpec]:
+        """
+        Return n_each instances of each of the 4 replay sub-variants, shuffled.
+        Convenience method for replay-focused dataset generation.
+        """
+        specs = (
+            [self.replay_token()           for _ in range(n_each)] +
+            [self.nonce_reuse()            for _ in range(n_each)] +
+            [self.timestamp_inconsistency() for _ in range(n_each)] +
+            [self.duplicate_sequence()     for _ in range(n_each)]
+        )
+        random.shuffle(specs)
+        return specs
+
     def anomaly(self, anomaly_type: str) -> ScenarioSpec:
         """
         Generate one anomaly scenario spec.

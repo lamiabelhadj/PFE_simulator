@@ -280,8 +280,20 @@ def _build_row(
             row["attack_phase"] = "none"
             row["severity"]     = "none"
 
-    row["anomaly_type"] = row["attack_type"]   # Phase 2 alias
+    row["anomaly_type"]  = row["attack_type"]   # Phase 2 alias
     row["anomaly_phase"] = row["attack_phase"]  # Phase 2 alias
+
+    # ── Phase 4: replay variant signals ──────────────────────────────────────
+    if ctx:
+        row["token_age_at_replay"]     = getattr(ctx, "token_age_at_replay",     0.0)
+        row["nonce_age_at_reuse"]      = getattr(ctx, "nonce_age_at_reuse",      0.0)
+        row["timestamp_delta_s"]       = getattr(ctx, "timestamp_delta_s",       0.0)
+        row["duplicate_session_count"] = getattr(ctx, "duplicate_session_count", 0)
+    else:
+        row["token_age_at_replay"]     = 0.0
+        row["nonce_age_at_reuse"]      = 0.0
+        row["timestamp_delta_s"]       = 0.0
+        row["duplicate_session_count"] = 0
 
     return row
 

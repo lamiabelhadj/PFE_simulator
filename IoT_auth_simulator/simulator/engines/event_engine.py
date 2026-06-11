@@ -199,6 +199,12 @@ class SessionContext:
     attack_phase: str   # event_type of injected anomaly | "none"
     severity:     str   # none | medium | high | critical
 
+    # ── Phase 4: per-variant replay signals (default 0 for non-replay sessions) ─
+    token_age_at_replay:     float = 0.0  # replay_token: seconds since token was issued
+    nonce_age_at_reuse:      float = 0.0  # nonce_reuse: seconds since challenge was sent
+    timestamp_delta_s:       float = 0.0  # timestamp_inconsistency: backward-jump magnitude
+    duplicate_session_count: int   = 0    # duplicate_sequence: number of replayed sequences
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -288,6 +294,11 @@ class EventEngine:
             "replay_window_violation": 0,
             # retry tracking
             "n_retries_fired":       0,
+            # Phase 4: per-variant replay signals
+            "token_age_at_replay":      0.0,
+            "nonce_age_at_reuse":       0.0,
+            "timestamp_delta_s":        0.0,
+            "duplicate_session_count":  0,
         }
 
         # ── Run normal steps ──────────────────────────────────────────────────
@@ -382,17 +393,32 @@ class EventEngine:
             delay      = self._sample_delay(spec.injection_event, profile)
             current_ts = current_ts + delay
 
-            if spec.anomaly_type == "timestamp_inconsistency":
-                current_ts = current_ts - random.uniform(400, 900)
+            # ── Phase 4: per-variant enrichment before state machine step ────────
 
-            # Phase 3: for replay_token, simulate a token presented well outside
-            # the allowed window so is_replay_violation() returns True
+            # replay_token: token presented well outside the allowed replay window
             if spec.anomaly_type == "replay_token":
-                te.record_token_issued(current_ts - random.uniform(120, 600))
+                stolen_age = random.uniform(120, 600)
+                te.record_token_issued(current_ts - stolen_age)
                 te.record_token_presented(current_ts)
-                ctx["replay_window_violation"] = int(te.is_replay_violation(current_ts))
-                if ctx["replay_window_violation"] == 0:
-                    ctx["replay_window_violation"] = 1   # force True for labelled replay
+                ctx["replay_window_violation"] = 1
+                ctx["token_age_at_replay"]     = round(stolen_age, 2)
+
+            # nonce_reuse: reuse the existing nonce value so n_nonce_reuses > 0
+            # nonce stays as-is — we deliberately do NOT generate a new one here.
+            # The same value will appear on both the original NONCE_RECEIVED event
+            # and this injected event, making output_views count it as a reuse.
+            if spec.anomaly_type == "nonce_reuse" and nonce is not None:
+                ctx["nonce_age_at_reuse"] = round(te.nonce_age(current_ts), 2)
+
+            # timestamp_inconsistency: record the backward-jump magnitude before applying
+            if spec.anomaly_type == "timestamp_inconsistency":
+                delta       = random.uniform(400, 900)
+                current_ts  = current_ts - delta
+                ctx["timestamp_delta_s"] = round(delta, 2)
+
+            # duplicate_sequence: a complete auth sequence replayed inside open session
+            if spec.anomaly_type == "duplicate_sequence":
+                ctx["duplicate_session_count"] = 1
 
             prev_state = sm.state
             sm.force(spec.injection_from_state)
@@ -413,6 +439,14 @@ class EventEngine:
             if spec.anomaly_type in {"replay_token", "identity_token_mismatch"}:
                 ctx["credential_status"] = 0
 
+            # For nonce_reuse injection: carry the original nonce so output_views
+            # detects the duplicate (same nonce value on two distinct events).
+            injected_nonce = (
+                nonce
+                if spec.anomaly_type == "nonce_reuse"
+                else (nonce if spec.injection_event in NONCE_CARRYING_EVENTS else None)
+            )
+
             ev = self._make_event(
                 event_type=spec.injection_event, prev_state=spec.injection_from_state,
                 new_state=new_state, result=EventResult.FAILURE,
@@ -420,7 +454,7 @@ class EventEngine:
                 session_id=session_id, scenario_id=spec.scenario_id,
                 timestamp=current_ts, delay=delay, retry_count=retry_count,
                 token_id=token_id if spec.injection_event in TOKEN_CARRYING_EVENTS else None,
-                nonce=nonce if spec.injection_event in NONCE_CARRYING_EVENTS else None,
+                nonce=injected_nonce,
                 anomaly_label=spec.anomaly_type,
                 identity_claim=identity_claim,
             )
@@ -603,6 +637,11 @@ class EventEngine:
             attack_type             = attack_type,
             attack_phase            = attack_phase,
             severity                = severity,
+            # Phase 4: replay variant signals
+            token_age_at_replay     = ctx.get("token_age_at_replay",     0.0),
+            nonce_age_at_reuse      = ctx.get("nonce_age_at_reuse",      0.0),
+            timestamp_delta_s       = ctx.get("timestamp_delta_s",       0.0),
+            duplicate_session_count = ctx.get("duplicate_session_count", 0),
         )
 
     # ══════════════════════════════════════════════════════════════════════════
