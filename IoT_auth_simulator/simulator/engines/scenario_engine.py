@@ -255,6 +255,44 @@ class ScenarioEngine:
 
     # ── Phase 4: named replay variant factories ───────────────────────────────
 
+    # ── Phase 5: named identity / session anomaly factories ──────────────────
+
+    def impersonation_variant(self) -> ScenarioSpec:
+        """
+        Device impersonation: attacker opens a session using a stolen identity.
+        Produces identity_claim_mismatch=1, source_ip_change=1, credential_status=0.
+        """
+        return self.anomaly("impersonation")
+
+    def token_session_mismatch(self) -> ScenarioSpec:
+        """
+        Token-session mismatch: foreign token (issued for another device) presented.
+        Produces token_device_mismatch=1, identity_claim_mismatch=1.
+        """
+        return self.anomaly("identity_token_mismatch")
+
+    def unauthorized_access_variant(self) -> ScenarioSpec:
+        """
+        Access without authentication: ACCESS_REQUEST before auth is complete.
+        Produces unauthorized_access_attempt=1, steps_before_access=injection_position.
+        """
+        return self.anomaly("access_without_auth")
+
+    def identity_anomalies_batch(self, n_each: int = 25) -> List[ScenarioSpec]:
+        """
+        Return n_each instances of each of the 3 identity/session anomaly sub-types,
+        shuffled. Convenience method for identity-focused dataset generation.
+        """
+        specs = (
+            [self.impersonation_variant()    for _ in range(n_each)] +
+            [self.token_session_mismatch()   for _ in range(n_each)] +
+            [self.unauthorized_access_variant() for _ in range(n_each)]
+        )
+        random.shuffle(specs)
+        return specs
+
+    # ── Phase 4: named replay variant factories ───────────────────────────────
+
     def replay_token(self) -> ScenarioSpec:
         """Old token replayed outside the replay window. Produces token_age_at_replay > 0."""
         return self.anomaly("replay_token")

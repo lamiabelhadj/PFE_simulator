@@ -295,6 +295,18 @@ def _build_row(
         row["timestamp_delta_s"]       = 0.0
         row["duplicate_session_count"] = 0
 
+    # ── Phase 5: identity / session anomaly signals ───────────────────────────
+    if ctx:
+        row["identity_claim_mismatch"]     = getattr(ctx, "identity_claim_mismatch",     0)
+        row["token_device_mismatch"]       = getattr(ctx, "token_device_mismatch",       0)
+        row["unauthorized_access_attempt"] = getattr(ctx, "unauthorized_access_attempt", 0)
+        row["steps_before_access"]         = getattr(ctx, "steps_before_access",         0)
+    else:
+        row["identity_claim_mismatch"]     = 0
+        row["token_device_mismatch"]       = 0
+        row["unauthorized_access_attempt"] = 0
+        row["steps_before_access"]         = 0
+
     return row
 
 

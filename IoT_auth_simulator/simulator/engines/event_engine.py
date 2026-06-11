@@ -205,6 +205,12 @@ class SessionContext:
     timestamp_delta_s:       float = 0.0  # timestamp_inconsistency: backward-jump magnitude
     duplicate_session_count: int   = 0    # duplicate_sequence: number of replayed sequences
 
+    # ── Phase 5: identity / session anomaly signals ───────────────────────────
+    identity_claim_mismatch:    int = 0   # impersonation: claimed_id != device_id
+    token_device_mismatch:      int = 0   # identity_token_mismatch: foreign token used
+    unauthorized_access_attempt: int = 0  # access_without_auth: ACCESS_REQUEST before auth
+    steps_before_access:        int = 0   # access_without_auth: auth steps completed before attempt
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -299,6 +305,11 @@ class EventEngine:
             "nonce_age_at_reuse":       0.0,
             "timestamp_delta_s":        0.0,
             "duplicate_session_count":  0,
+            # Phase 5: identity / session anomaly signals
+            "identity_claim_mismatch":    0,
+            "token_device_mismatch":      0,
+            "unauthorized_access_attempt": 0,
+            "steps_before_access":        0,
         }
 
         # ── Run normal steps ──────────────────────────────────────────────────
@@ -430,13 +441,35 @@ class EventEngine:
                 new_state = spec.injection_from_state
 
             identity_claim = None
-            if spec.anomaly_type == "impersonation":
-                identity_claim           = f"victim-{str(uuid.uuid4())[:8]}"
-                ctx["source_ip_change"]  = 1
-                ctx["credential_status"] = 0
-                ctx["identity_claim"]    = identity_claim
 
-            if spec.anomaly_type in {"replay_token", "identity_token_mismatch"}:
+            # ── Phase 5: identity / session anomaly enrichment ────────────────
+
+            if spec.anomaly_type == "impersonation":
+                identity_claim                   = f"victim-{str(uuid.uuid4())[:8]}"
+                ctx["source_ip_change"]          = 1
+                ctx["credential_status"]         = 0
+                ctx["identity_claim"]            = identity_claim
+                ctx["identity_claim_mismatch"]   = 1   # claimed_id != device_id
+
+            elif spec.anomaly_type == "identity_token_mismatch":
+                # Attacker presents a token issued for a *different* device.
+                # Overwrite token_id with a foreign one so it never matches
+                # the token that was (or would have been) issued in this session.
+                token_id = f"foreign-{str(uuid.uuid4())}"
+                identity_claim                 = f"victim-{str(uuid.uuid4())[:8]}"
+                ctx["identity_claim"]          = identity_claim
+                ctx["credential_status"]       = 0
+                ctx["token_device_mismatch"]   = 1
+                ctx["identity_claim_mismatch"] = 1
+
+            elif spec.anomaly_type == "access_without_auth":
+                # Device tries to access a resource before any auth has completed.
+                ctx["credential_status"]              = 0  # no auth = no valid credential
+                ctx["auth_result"]                    = 0
+                ctx["unauthorized_access_attempt"]    = 1
+                ctx["steps_before_access"]            = spec.injection_position
+
+            if spec.anomaly_type in {"replay_token"}:
                 ctx["credential_status"] = 0
 
             # For nonce_reuse injection: carry the original nonce so output_views
@@ -642,6 +675,11 @@ class EventEngine:
             nonce_age_at_reuse      = ctx.get("nonce_age_at_reuse",      0.0),
             timestamp_delta_s       = ctx.get("timestamp_delta_s",       0.0),
             duplicate_session_count = ctx.get("duplicate_session_count", 0),
+            # Phase 5: identity / session anomaly signals
+            identity_claim_mismatch     = ctx.get("identity_claim_mismatch",     0),
+            token_device_mismatch       = ctx.get("token_device_mismatch",       0),
+            unauthorized_access_attempt = ctx.get("unauthorized_access_attempt", 0),
+            steps_before_access         = ctx.get("steps_before_access",         0),
         )
 
     # ══════════════════════════════════════════════════════════════════════════
