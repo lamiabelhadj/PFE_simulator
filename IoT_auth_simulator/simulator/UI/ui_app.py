@@ -449,6 +449,17 @@ def render_load():
         st.session_state["csv_path"] = csv_path
         st.session_state["elapsed"]  = elapsed
 
+        # Download the freshly generated dataset right away
+        event_csv_name = csv_path.name.replace("_features.csv", "_event_log.csv")
+        st.download_button(
+            label=f"Download dataset — {event_csv_name}",
+            data=st.session_state["event_df"].to_csv(index=False).encode("utf-8"),
+            file_name=event_csv_name,
+            mime="text/csv",
+            use_container_width=True,
+            icon=":material/download:",
+        )
+
         # Quick jump to results
         j1, j2, _ = st.columns([1, 1, 2])
         with j1:

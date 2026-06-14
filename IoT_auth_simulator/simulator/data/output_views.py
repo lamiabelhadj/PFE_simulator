@@ -78,9 +78,9 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
     """
     One row per AuthEvent.
 
-    Each row keeps the raw Unix `timestamp` and adds a human-readable
-    `timestamp_iso` column, plus the session-level `attack_type` label so the
-    per-event log is self-describing and filterable.
+    The `timestamp` column is rendered as a human-readable UTC datetime string
+    (YYYY-MM-DD HH:MM:SS.mmm), and each row carries the session-level
+    `attack_type` label so the per-event log is self-describing and filterable.
     """
     pairs = _normalise(sequences)
     rows  = []
@@ -100,13 +100,13 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
-    # Human-readable UTC timestamp alongside the raw Unix value (ms precision).
-    df["timestamp_iso"] = (
+    # Render the raw Unix timestamp as a human-readable UTC string (ms precision).
+    df["timestamp"] = (
         pd.to_datetime(df["timestamp"], unit="s")
           .dt.strftime("%Y-%m-%d %H:%M:%S.%f").str[:-3]
     )
     ordered = [
-        "event_id", "event_type", "timestamp", "timestamp_iso",
+        "event_id", "event_type", "timestamp",
         "delay_since_previous_event",
         "scenario_id", "session_id",
         "device_id", "gateway_id", "auth_server_id", "broker_id",
