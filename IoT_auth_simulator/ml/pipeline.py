@@ -113,7 +113,7 @@ def run(
     -------
     Dict[model_name → EvalResult]
     """
-    sep = "═" * 55
+    sep = "=" * 55
 
     if verbose:
         print(f"\n{sep}")
@@ -184,6 +184,6 @@ def run(
             path = out / f"ml_results_{target}.csv"
             cmp_df.to_csv(path)
             if verbose:
-                print(f"\n  Results saved → {path}")
+                print(f"\n  Results saved -> {path}")
 
     return results

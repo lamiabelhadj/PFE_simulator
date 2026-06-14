@@ -10,8 +10,16 @@ Usage:
 """
 
 import argparse
+import sys
 import time
 from pathlib import Path
+
+# Windows consoles default to cp1252, which cannot encode characters like '→'
+# used in log/print output across the simulator.
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from simulator.config.settings import cfg, DATA_DIR
 from simulator.runner import run_simulation

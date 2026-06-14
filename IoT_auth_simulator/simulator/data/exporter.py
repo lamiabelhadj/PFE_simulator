@@ -40,6 +40,6 @@ def save(
         df = to_feature_df(sequences)
         p  = DATA_DIR / f"{stem}_features.parquet"
         df.to_parquet(p, index=False)
-        print(f"  Parquet     → {p}")
+        print(f"  Parquet     -> {p}")
 
     return paths.get("feature_csv", DATA_DIR / filename)

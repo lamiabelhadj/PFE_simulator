@@ -179,7 +179,7 @@ def compare_models(results: List[EvalResult]) -> pd.DataFrame:
 
 def print_report(result: EvalResult) -> None:
     """Print a human-readable evaluation report for one model."""
-    sep = "─" * 55
+    sep = "-" * 55
     print(f"\n{sep}")
     print(f"  {result.model_name}")
     print(sep)

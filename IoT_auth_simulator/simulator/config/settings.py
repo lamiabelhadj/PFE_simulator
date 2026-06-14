@@ -37,9 +37,15 @@ class SimulationConfig:
 
     # Attack type distribution (must sum to 1.0)
     attack_distribution: Dict[str, float] = field(default_factory=lambda: {
-        "replay":         0.35,
-        "impersonation":  0.35,
-        "dos_flooding":   0.30,
+        "replay_token":            0.12,
+        "nonce_reuse":             0.12,
+        "timestamp_inconsistency": 0.12,
+        "duplicate_sequence":      0.11,
+        "impersonation":           0.12,
+        "identity_token_mismatch": 0.12,
+        "access_without_auth":     0.12,
+        "abnormal_failure_rate":   0.09,
+        "abnormal_renewal":        0.08,
     })
 
     # Gateway pool size
@@ -195,9 +201,15 @@ class AttackConfig:
 
     # Severity mapping per attack type
     severity_map: Dict[str, str] = field(default_factory=lambda: {
-        "replay":        "medium",
-        "impersonation": "high",
-        "dos_flooding":  "critical",
+        "replay_token":            "medium",
+        "nonce_reuse":             "medium",
+        "timestamp_inconsistency": "medium",
+        "duplicate_sequence":      "medium",
+        "impersonation":           "high",
+        "identity_token_mismatch": "high",
+        "access_without_auth":     "high",
+        "abnormal_failure_rate":   "high",
+        "abnormal_renewal":        "medium",
     })
 
 

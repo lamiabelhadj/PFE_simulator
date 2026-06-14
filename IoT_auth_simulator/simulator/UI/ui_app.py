@@ -1,15 +1,20 @@
 """
-ui/app.py
-──────────
-Streamlit UI for the IoT Authentication Simulator.
+IoT Authentication Simulator — Streamlit UI
 
-Run with:
-    streamlit run ui/app.py
+Run from the IoT_auth_simulator/ directory:
+    streamlit run simulator/UI/ui_app.py
 """
 
 import sys
 import time
 from pathlib import Path
+
+# Windows consoles default to cp1252, which cannot encode characters like '→'
+# used in log/print output across the simulator.
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -29,165 +34,91 @@ st.set_page_config(
 )
 
 
-# ── Global styles + Tabler Icons ─────────────────────────────────────────────
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <link rel="stylesheet"
   href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 
 <style>
-  /* ── Layout ── */
   [data-testid="stAppViewContainer"] > .main { padding-top: 1.5rem; }
-  [data-testid="stSidebar"] { padding-top: 1rem; }
   [data-testid="stSidebar"] > div:first-child { padding: 1.5rem 1rem; }
+  h1 { font-size: 1.6rem !important; font-weight: 500 !important; }
+  h2 { font-size: 1.15rem !important; font-weight: 500 !important; }
 
-  /* ── Typography ── */
-  h1, h2, h3 { font-weight: 500 !important; letter-spacing: -0.01em; }
-  h1 { font-size: 1.6rem !important; }
-  h2 { font-size: 1.2rem !important; }
-  h3 { font-size: 1rem !important; }
-
-  /* ── Sidebar brand ── */
+  .section-label {
+    font-size: 0.68rem; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    opacity: 0.45; margin: 0.75rem 0 0.35rem;
+  }
   .brand-block {
     display: flex; align-items: center; gap: 10px;
     padding-bottom: 1rem;
     border-bottom: 0.5px solid rgba(128,128,128,0.2);
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.25rem;
   }
   .brand-icon {
     width: 34px; height: 34px; border-radius: 8px;
-    background: rgba(56, 139, 220, 0.15);
+    background: rgba(56,139,220,0.15);
     display: flex; align-items: center; justify-content: center;
     font-size: 18px; color: #388bdc;
   }
-  .brand-name { font-size: 0.9rem; font-weight: 500; line-height: 1.2; }
+  .brand-name { font-size: 0.9rem; font-weight: 500; }
   .brand-sub  { font-size: 0.7rem; opacity: 0.5; }
 
-  /* ── Section labels ── */
-  .section-label {
-    font-size: 0.68rem; font-weight: 600;
-    letter-spacing: 0.08em; text-transform: uppercase;
-    opacity: 0.45; margin-bottom: 0.5rem; margin-top: 0.25rem;
-  }
-
-  /* ── Metric cards ── */
-  .metric-card {
-    background: rgba(128,128,128,0.07);
-    border-radius: 10px;
-    padding: 0.85rem 1.1rem;
-    height: 100%;
-  }
-  .metric-label {
-    font-size: 0.7rem; opacity: 0.5;
-    text-transform: uppercase; letter-spacing: 0.05em;
-    margin-bottom: 4px;
-  }
-  .metric-value { font-size: 1.6rem; font-weight: 500; line-height: 1.1; }
-  .metric-sub   { font-size: 0.7rem; opacity: 0.4; margin-top: 2px; }
-
-  /* ── Badges ── */
-  .badge {
-    display: inline-block; font-size: 0.68rem; font-weight: 500;
-    padding: 2px 8px; border-radius: 20px;
-  }
-  .badge-normal       { background: rgba(46,160,67,0.15); color: #2ea043; }
-  .badge-replay       { background: rgba(186,117,23,0.15); color: #c17d14; }
-  .badge-impersonation{ background: rgba(226,75,74,0.15);  color: #e24b4a; }
-  .badge-dos          { background: rgba(56,139,220,0.15); color: #388bdc; }
-
-  /* ── Chart card title ── */
-  .chart-card-title {
+  .chart-title {
     font-size: 0.75rem; font-weight: 500; opacity: 0.6;
-    display: flex; align-items: center; gap: 6px;
-    margin-bottom: 0.6rem;
+    margin-bottom: 0.5rem;
   }
-
-  /* ── Progress bar ── */
   .stProgress > div > div { background-color: #388bdc; border-radius: 4px; }
-
-  /* ── Table ── */
-  [data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; }
-
-  /* ── Buttons ── */
-  .stButton > button {
-    border-radius: 8px !important;
-    font-weight: 500 !important;
-    letter-spacing: 0.01em !important;
-  }
-
-  /* ── DoS pill ── */
-  .dos-pill {
-    font-size: 0.75rem;
-    background: rgba(186,117,23,0.12);
-    color: #c17d14;
-    border-radius: 6px;
-    padding: 5px 10px;
-    margin-top: 4px;
-  }
-
-  /* ── Divider ── */
-  hr { border-color: rgba(128,128,128,0.15) !important; margin: 0.5rem 0 !important; }
-
-  /* ── Download button ── */
-  [data-testid="stDownloadButton"] > button {
-    width: 100%;
-    border-radius: 8px !important;
-    font-weight: 500 !important;
-  }
+  hr { border-color: rgba(128,128,128,0.15) !important; }
+  [data-testid="stDownloadButton"] > button { width: 100%; border-radius: 8px !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Matplotlib dark theme ─────────────────────────────────────────────────────
-BG_CHART = "#0e1117"
-BG_PANEL = "#1a1d27"
-CLR_TEXT = "#c9d1d9"
-PALETTE  = {
-    "normal":        "#388bdc",
-    "replay":        "#c17d14",
-    "impersonation": "#e24b4a",
-    "dos_flooding":  "#2ea043",
+# ── Theme constants ───────────────────────────────────────────────────────────
+BG      = "#0e1117"
+BG2     = "#1a1d27"
+CLR     = "#c9d1d9"
+
+# One colour per attack type (9 types + normal)
+PALETTE = {
+    "normal":                  "#388bdc",
+    "replay_token":            "#c17d14",
+    "nonce_reuse":             "#e24b4a",
+    "timestamp_inconsistency": "#9b59b6",
+    "duplicate_sequence":      "#2ea043",
+    "impersonation":           "#f39c12",
+    "identity_token_mismatch": "#e74c3c",
+    "access_without_auth":     "#1abc9c",
+    "abnormal_failure_rate":   "#e67e22",
+    "abnormal_renewal":        "#3498db",
 }
 
 plt.rcParams.update({
-    "figure.facecolor": BG_CHART,
-    "axes.facecolor":   BG_CHART,
-    "axes.edgecolor":   "#30363d",
-    "axes.labelcolor":  CLR_TEXT,
-    "xtick.color":      CLR_TEXT,
-    "ytick.color":      CLR_TEXT,
-    "text.color":       CLR_TEXT,
-    "grid.color":       "#21262d",
-    "legend.facecolor": BG_PANEL,
-    "legend.edgecolor": "#30363d",
-    "font.size":        8,
+    "figure.facecolor": BG,  "axes.facecolor":  BG,
+    "axes.edgecolor":   "#30363d", "axes.labelcolor": CLR,
+    "xtick.color": CLR, "ytick.color": CLR,
+    "text.color":  CLR, "grid.color":  "#21262d",
+    "legend.facecolor": BG2, "legend.edgecolor": "#30363d",
+    "font.size": 8,
 })
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def metric_card(label, value, sub=""):
-    st.metric(label=label, value=value, help=sub if sub else None)
-
-
 def icon(name, size=16, style=""):
-    return (
-        f'<i class="ti ti-{name}" '
-        f'aria-hidden="true" style="font-size:{size}px;vertical-align:-2px;{style}"></i>'
-    )
-
+    return (f'<i class="ti ti-{name}" aria-hidden="true" '
+            f'style="font-size:{size}px;vertical-align:-2px;{style}"></i>')
 
 def section_label(text):
     st.markdown(f'<div class="section-label">{text}</div>', unsafe_allow_html=True)
 
-
-def chart_card_title(icon_name, text):
-    st.markdown(
-        f'<div class="chart-card-title">{icon(icon_name, 14)} {text}</div>',
-        unsafe_allow_html=True,
-    )
+def chart_title(text):
+    st.markdown(f'<div class="chart-title">{text}</div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Sidebar
+# Sidebar — Configuration
 # ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown(
@@ -202,25 +133,40 @@ with st.sidebar:
     )
 
     section_label("Device pool")
-    num_devices = st.slider("Number of devices", 10, 500, cfg.simulation.num_devices, 10,
+    num_devices = st.slider("Number of devices", 10, 500,
+                            cfg.simulation.num_devices, 10,
                             label_visibility="collapsed")
     st.caption(f"{num_devices} unique device IDs")
 
     section_label("Sessions")
-    num_normal = st.slider("Normal sessions", 50, 2000, cfg.simulation.num_sessions_normal, 50)
-    num_attack = st.slider("Attack sessions", 10, 1000, cfg.simulation.num_sessions_attack, 10)
+    num_normal = st.slider("Normal sessions", 50, 2000,
+                           cfg.simulation.num_sessions_normal, 50)
+    num_attack = st.slider("Attack sessions", 10, 500,
+                           cfg.simulation.num_sessions_attack, 10)
 
-    section_label("Attack distribution")
-    replay_pct        = st.slider("Replay (%)",        0, 100, 35, 5)
-    impersonation_pct = st.slider("Impersonation (%)", 0, 100 - replay_pct, 35, 5)
-    dos_pct           = 100 - replay_pct - impersonation_pct
-    st.markdown(
-        f'<div class="dos-pill">'
-        f'{icon("alert-triangle", 13, "margin-right:5px;")} '
-        f'DoS / Flooding: <strong>{dos_pct}%</strong> (auto-computed)'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    section_label("Attack distribution (%)")
+    st.caption("Sliders are relative weights — auto-normalised to 100%.")
+
+    attack_types = [
+        "replay_token", "nonce_reuse", "timestamp_inconsistency",
+        "duplicate_sequence", "impersonation", "identity_token_mismatch",
+        "access_without_auth", "abnormal_failure_rate", "abnormal_renewal",
+    ]
+    default_weights = [12, 12, 12, 11, 12, 12, 12, 9, 8]
+
+    raw_weights = {}
+    for atype, dw in zip(attack_types, default_weights):
+        raw_weights[atype] = st.slider(
+            atype.replace("_", " ").title(),
+            0, 50, dw, 1,
+        )
+
+    total_w = sum(raw_weights.values()) or 1
+    attack_dist = {k: round(v / total_w, 4) for k, v in raw_weights.items()}
+    # Ensure sum == 1.0 exactly (fix rounding on largest bucket)
+    diff = 1.0 - sum(attack_dist.values())
+    largest = max(attack_dist, key=attack_dist.get)
+    attack_dist[largest] = round(attack_dist[largest] + diff, 4)
 
     section_label("Options")
     seed         = st.number_input("Random seed", value=42, step=1)
@@ -228,11 +174,7 @@ with st.sidebar:
     save_parquet = st.checkbox("Export Parquet")
 
     st.markdown("<br>", unsafe_allow_html=True)
-    run_btn = st.button(
-        "Run simulation",
-        type="primary",
-        use_container_width=True,
-    )
+    run_btn = st.button("Run simulation", type="primary", use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -244,23 +186,22 @@ st.markdown(
                       background:rgba(56,139,220,0.12);
                       display:flex;align-items:center;justify-content:center;
                       font-size:20px;color:#388bdc;">{icon("shield-lock", 20)}</div>
-          <h1 style="margin:0">IoT Authentication Flows simulator</h1>
+          <h1 style="margin:0">IoT Authentication Flow Simulator</h1>
         </div>""",
     unsafe_allow_html=True,
 )
 st.markdown(
-    "<p style='opacity:0.55;font-size:0.85rem;margin-bottom:1rem;'>"
-    "Generate labelled IoT authentication flows — normal, replay, impersonation, "
-    "and DoS/flooding — for anomaly-detection.</p>",
+    "<p style='opacity:0.5;font-size:0.85rem;margin-bottom:1rem;'>"
+    "Generates labelled IoT authentication event sequences — normal and 9 attack variants — "
+    "for anomaly-detection ML pipelines.</p>",
     unsafe_allow_html=True,
 )
 
-# ── Summary stats ─────────────────────────────────────────────────────────────
 c1, c2, c3, c4 = st.columns(4)
-with c1: metric_card("Device pool",     f"{num_devices:,}", "unique IDs")
-with c2: metric_card("Normal sessions", f"{num_normal:,}",  "labelled benign")
-with c3: metric_card("Attack sessions", f"{num_attack:,}",  "labelled anomaly")
-with c4: metric_card("Total rows",      f"{num_normal + num_attack:,}", "dataset size")
+c1.metric("Device pool",     f"{num_devices:,}")
+c2.metric("Normal sessions", f"{num_normal:,}")
+c3.metric("Attack sessions", f"{num_attack:,}")
+c4.metric("Total rows",      f"{num_normal + num_attack:,}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -269,56 +210,53 @@ st.markdown("<br>", unsafe_allow_html=True)
 # Simulation run
 # ══════════════════════════════════════════════════════════════════════════════
 if run_btn:
+    # Push config overrides
     cfg.simulation.num_devices         = num_devices
     cfg.simulation.num_sessions_normal = num_normal
     cfg.simulation.num_sessions_attack = num_attack
     cfg.simulation.random_seed         = int(seed)
     cfg.simulation.output_filename     = out_name
-    cfg.simulation.attack_distribution = {
-        "replay":        round(replay_pct / 100, 2),
-        "impersonation": round(impersonation_pct / 100, 2),
-        "dos_flooding":  round(dos_pct / 100, 2),
-    }
+    cfg.simulation.attack_distribution = attack_dist
 
-    st.caption("Running simulation…")
     progress_bar = st.progress(0)
     status_text  = st.empty()
 
     from simulator.runner import run_simulation
     from simulator.data.exporter import save
-    from simulator.data.output_views import to_feature_df
+    from simulator.data.output_views import to_feature_df, to_event_df
 
-    def ui_progress(current, total, msg):
+    def _progress(current, total, msg):
         progress_bar.progress(min(current / total, 1.0))
         status_text.text(msg)
 
     t0        = time.time()
-    sequences = run_simulation(progress_callback=ui_progress)
+    sequences = run_simulation(progress_callback=_progress)
     elapsed   = time.time() - t0
 
     progress_bar.progress(1.0)
     status_text.empty()
 
     csv_path = save(sequences, filename=out_name, parquet=save_parquet)
-
-    st.success(f"Completed in {elapsed:.1f}s — dataset saved to `{csv_path}`")
+    st.success(f"Completed in {elapsed:.1f}s — saved to `{csv_path}`")
 
     st.session_state["df"]       = to_feature_df(sequences)
+    st.session_state["event_df"] = to_event_df(sequences)
     st.session_state["csv_path"] = csv_path
     st.session_state["elapsed"]  = elapsed
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Dashboard
+# Dashboard (shown after run)
 # ══════════════════════════════════════════════════════════════════════════════
 if "df" in st.session_state:
     df       = st.session_state["df"]
+    event_df = st.session_state["event_df"]
     csv_path = Path(st.session_state["csv_path"])
     elapsed  = st.session_state["elapsed"]
 
+    st.markdown("---")
     st.markdown(
-        f'<h2 style="margin:0 0 0.75rem;">'
-        f'{icon("table", 16, "margin-right:6px;")} Dataset overview</h2>',
+        f'<h2>{icon("table", 15, "margin-right:6px;")} Dataset overview</h2>',
         unsafe_allow_html=True,
     )
 
@@ -326,98 +264,123 @@ if "df" in st.session_state:
     attack_n = int((df["is_anomaly"] == 1).sum())
 
     m1, m2, m3, m4, m5 = st.columns(5)
-    with m1: metric_card("Total rows", f"{len(df):,}")
-    with m2: metric_card("Features",   f"{len(df.columns):,}")
-    with m3: metric_card("Normal",     f"{normal_n:,}")
-    with m4: metric_card("Attacks",    f"{attack_n:,}")
-    with m5: metric_card("Runtime",    f"{elapsed:.1f}s")
+    m1.metric("Total events",   f"{len(event_df):,}")
+    m2.metric("Sessions",       f"{len(df):,}")
+    m3.metric("Normal sess.",   f"{normal_n:,}")
+    m4.metric("Attack sess.",   f"{attack_n:,}")
+    m5.metric("Runtime",        f"{elapsed:.1f}s")
 
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("---")
 
     # ── Charts ────────────────────────────────────────────────────────────────
     ch1, ch2, ch3 = st.columns(3)
 
     with ch1:
-        chart_card_title("chart-pie", "Attack type distribution")
+        chart_title("Attack type distribution")
         type_counts = df["attack_type"].value_counts()
         colors = [PALETTE.get(k, "#888") for k in type_counts.index]
-        fig, ax = plt.subplots(figsize=(4, 3))
-        ax.pie(
+        fig, ax = plt.subplots(figsize=(4, 3.2))
+        wedges, texts, autotexts = ax.pie(
             type_counts.values,
-            labels=type_counts.index,
-            autopct="%1.1f%%",
+            labels=None,
+            autopct="%1.0f%%",
             colors=colors,
-            textprops={"fontsize": 8, "color": CLR_TEXT},
-            wedgeprops={"linewidth": 0.5, "edgecolor": BG_CHART},
+            textprops={"fontsize": 7, "color": CLR},
+            wedgeprops={"linewidth": 0.5, "edgecolor": BG},
             startangle=90,
+        )
+        ax.legend(
+            wedges, type_counts.index,
+            loc="lower center", bbox_to_anchor=(0.5, -0.28),
+            ncol=2, fontsize=6, framealpha=0.3,
         )
         st.pyplot(fig)
         plt.close()
 
     with ch2:
-        chart_card_title("chart-bar", "Message rate: normal vs attack")
-        fig, ax = plt.subplots(figsize=(4, 3))
+        chart_title("Message rate by attack type")
+        fig, ax = plt.subplots(figsize=(4, 3.2))
         for label, color in PALETTE.items():
             subset = df[df["attack_type"] == label]["message_rate"].dropna()
             if not subset.empty:
-                subset.clip(upper=subset.quantile(0.99)).hist(
-                    ax=ax, bins=30, alpha=0.65, label=label, color=color
-                )
+                clipped = subset.clip(upper=subset.quantile(0.99))
+                clipped.hist(ax=ax, bins=25, alpha=0.55, label=label, color=color)
         ax.set_xlabel("Message rate (msg/s)", fontsize=8)
         ax.set_ylabel("Count", fontsize=8)
-        ax.tick_params(labelsize=7)
-        ax.legend(fontsize=7)
+        ax.legend(fontsize=6, ncol=2)
         ax.grid(axis="y", alpha=0.3)
         st.pyplot(fig)
         plt.close()
 
     with ch3:
-        chart_card_title("activity", "Trust score distribution")
-        fig, ax = plt.subplots(figsize=(4, 3))
+        chart_title("Trust score distribution")
+        fig, ax = plt.subplots(figsize=(4, 3.2))
         for label, color in PALETTE.items():
             subset = df[df["attack_type"] == label]["trust_score"].dropna()
             if not subset.empty:
-                subset.hist(ax=ax, bins=20, alpha=0.65, label=label, color=color)
+                subset.hist(ax=ax, bins=20, alpha=0.55, label=label, color=color)
         ax.set_xlabel("Trust score", fontsize=8)
         ax.set_ylabel("Count", fontsize=8)
-        ax.tick_params(labelsize=7)
-        ax.legend(fontsize=7)
+        ax.legend(fontsize=6, ncol=2)
         ax.grid(axis="y", alpha=0.3)
         st.pyplot(fig)
         plt.close()
 
-    # ── Sample rows ───────────────────────────────────────────────────────────
+    # ── Phase 4/5 signal overview ─────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("---")
     st.markdown(
-        f'<h2 style="margin:0 0 0.75rem;">'
-        f'{icon("list-details", 16, "margin-right:6px;")} Sample rows</h2>',
+        f'<h2>{icon("radar", 15, "margin-right:6px;")} Anomaly signal summary</h2>',
         unsafe_allow_html=True,
     )
 
-    col_filter, _ = st.columns([2, 5])
-    with col_filter:
-        filter_type = st.selectbox(
-            "Filter by type",
-            ["All"] + sorted(df["attack_type"].unique().tolist()),
-            label_visibility="collapsed",
+    sig_cols = [
+        "replay_window_violation", "token_age_at_replay",
+        "nonce_age_at_reuse", "timestamp_delta_s",
+        "duplicate_session_count", "identity_claim_mismatch",
+        "token_device_mismatch", "unauthorized_access_attempt",
+        "failed_auth_count", "re_auth_required",
+    ]
+    sig_cols_present = [c for c in sig_cols if c in df.columns]
+    if sig_cols_present:
+        sig_df = (
+            df[["attack_type"] + sig_cols_present]
+            .groupby("attack_type")[sig_cols_present]
+            .mean()
+            .round(3)
         )
+        st.dataframe(sig_df, use_container_width=True)
 
-    view_df = df if filter_type == "All" else df[df["attack_type"] == filter_type]
-    st.dataframe(view_df.head(50), use_container_width=True, height=300)
+    # ── Sample rows (per-event log) ───────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(
+        f'<h2>{icon("list-details", 15, "margin-right:6px;")} Sample rows '
+        f'<span style="opacity:0.5;font-size:0.8rem;">(one row per event)</span></h2>',
+        unsafe_allow_html=True,
+    )
+    if "attack_type" in event_df.columns:
+        col_f, _ = st.columns([2, 5])
+        with col_f:
+            filter_type = st.selectbox(
+                "Filter by attack type",
+                ["All"] + sorted(event_df["attack_type"].unique().tolist()),
+                label_visibility="collapsed",
+            )
+        view_df = event_df if filter_type == "All" \
+                  else event_df[event_df["attack_type"] == filter_type]
+    else:
+        view_df = event_df
+    st.dataframe(view_df.head(100), use_container_width=True, height=300)
 
     # ── Correlation heatmap ───────────────────────────────────────────────────
-    with st.expander("Feature correlation heatmap (numeric features)"):
-        num_cols = df.select_dtypes(include="number").columns.tolist()
-        num_cols = [c for c in num_cols if df[c].std() > 0][:20]
+    with st.expander("Feature correlation heatmap"):
+        num_cols = [c for c in df.select_dtypes(include="number").columns
+                    if df[c].std() > 0][:24]
         corr = df[num_cols].corr()
-        fig, ax = plt.subplots(figsize=(10, 8))
-        sns.heatmap(
-            corr, ax=ax, cmap="coolwarm", center=0,
-            annot=False, linewidths=0.3,
-            cbar_kws={"shrink": 0.8},
-        )
-        ax.tick_params(labelsize=7)
+        fig, ax = plt.subplots(figsize=(11, 9))
+        sns.heatmap(corr, ax=ax, cmap="coolwarm", center=0,
+                    annot=False, linewidths=0.3, cbar_kws={"shrink": 0.8})
+        ax.tick_params(labelsize=6.5)
         st.pyplot(fig)
         plt.close()
 
@@ -434,15 +397,14 @@ if "df" in st.session_state:
     # ── Download ──────────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown(
-        f'<h2 style="margin:0 0 0.75rem;">'
-        f'{icon("download", 16, "margin-right:6px;")} Export</h2>',
+        f'<h2>{icon("download", 15, "margin-right:6px;")} Export</h2>',
         unsafe_allow_html=True,
     )
-    with open(csv_path, "rb") as f:
-        st.download_button(
-            label=f"Download CSV — {csv_path.name}",
-            data=f,
-            file_name=csv_path.name,
-            mime="text/csv",
-            use_container_width=True,
-        )   
+    event_csv_name = csv_path.name.replace("_features.csv", "_event_log.csv")
+    st.download_button(
+        label=f"Download CSV — {event_csv_name}",
+        data=event_df.to_csv(index=False).encode("utf-8"),
+        file_name=event_csv_name,
+        mime="text/csv",
+        use_container_width=True,
+    )

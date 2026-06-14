@@ -17,6 +17,14 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 
+
+def _print(msg: str) -> None:
+    """Print with ASCII fallback — safe on Windows cp1252 consoles."""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", errors="replace").decode("ascii"))
+
 from simulator.event_model import AuthEvent, AuthState, EventResult, EventType
 from simulator.engines.event_engine import SessionContext, SEVERITY_MAP
 
@@ -67,15 +75,39 @@ def to_json_log(sequences: SequenceInput) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
-    """One row per AuthEvent. All 26 to_dict() keys become columns."""
+    """
+    One row per AuthEvent.
+
+    Each row keeps the raw Unix `timestamp` and adds a human-readable
+    `timestamp_iso` column, plus the session-level `attack_type` label so the
+    per-event log is self-describing and filterable.
+    """
     pairs = _normalise(sequences)
-    rows  = [event.to_dict() for events, _ in pairs for event in events]
+    rows  = []
+    for events, ctx in pairs:
+        if not events:
+            continue
+        if ctx:
+            attack_type = getattr(ctx, "attack_type", "normal")
+        else:
+            lbls = [e.anomaly_label for e in events if getattr(e, "anomaly_label", None)]
+            attack_type = lbls[0] if lbls else "normal"
+        for event in events:
+            d = event.to_dict()
+            d["attack_type"] = attack_type
+            rows.append(d)
     if not rows:
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
+    # Human-readable UTC timestamp alongside the raw Unix value (ms precision).
+    df["timestamp_iso"] = (
+        pd.to_datetime(df["timestamp"], unit="s")
+          .dt.strftime("%Y-%m-%d %H:%M:%S.%f").str[:-3]
+    )
     ordered = [
-        "event_id", "event_type", "timestamp", "delay_since_previous_event",
+        "event_id", "event_type", "timestamp", "timestamp_iso",
+        "delay_since_previous_event",
         "scenario_id", "session_id",
         "device_id", "gateway_id", "auth_server_id", "broker_id",
         "previous_state", "new_state",
@@ -83,7 +115,7 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
         "token_id", "token_expiry", "token_scope",
         "nonce", "identity_claim",
         "client_id", "topic", "resource_id",
-        "firmware_version", "source_context", "anomaly_label",
+        "firmware_version", "source_context", "anomaly_label", "attack_type",
     ]
     extra = [c for c in df.columns if c not in ordered]
     return df[[c for c in ordered if c in df.columns] + extra]
@@ -140,7 +172,6 @@ def _build_row(
         row["source_ip"]               = getattr(ctx, "source_ip", None)
         row["registered_device"]       = getattr(ctx, "registered_device", None)
         row["source_connection_count"] = getattr(ctx, "source_connection_count", None)
-        row["source_diversity"]        = getattr(ctx, "source_diversity", None)
         row["battery_level"]           = getattr(ctx, "battery_level", None)
     else:
         identity_evs = [e for e in events if getattr(e, "identity_claim", None)]
@@ -148,7 +179,6 @@ def _build_row(
         row["source_ip"]               = None
         row["registered_device"]       = None
         row["source_connection_count"] = None
-        row["source_diversity"]        = None
         row["battery_level"]           = None
 
     # ── Phase 0: network / pairing ────────────────────────────────────────────
@@ -165,7 +195,6 @@ def _build_row(
 
     # ── Phase 0: enrollment & auth ────────────────────────────────────────────
     if ctx:
-        row["credential_status"]  = getattr(ctx, "credential_status", None)
         row["mqtt_msg_type"]      = getattr(ctx, "mqtt_msg_type", None)
         row["connect_flags"]      = getattr(ctx, "connect_flags", None)
         row["clean_session"]      = getattr(ctx, "clean_session", None)
@@ -183,8 +212,6 @@ def _build_row(
         row["requested_topic"]       = getattr(ctx, "requested_topic", None)
         row["topic_length"]          = getattr(ctx, "topic_length", None)
         row["operation"]             = getattr(ctx, "operation", None)
-        row["requested_qos"]         = getattr(ctx, "requested_qos", None)
-        row["granted_qos"]           = getattr(ctx, "granted_qos", None)
         row["authorization_result"]  = getattr(ctx, "authorization_result", None)
         row["topic_scope_violation"] = getattr(ctx, "topic_scope_violation", None)
         row["retain_flag"]           = getattr(ctx, "retain_flag", None)
@@ -198,17 +225,14 @@ def _build_row(
         row["qos_level"]       = getattr(ctx, "qos_level", None)
         row["message_rate"]    = getattr(ctx, "message_rate", None)
         row["byte_rate"]       = getattr(ctx, "byte_rate", None)
-        row["session_duration"] = getattr(ctx, "session_duration", None)
 
     # ── Phase 0: continuous re-auth ───────────────────────────────────────────
     if ctx:
         row["trust_score"]               = getattr(ctx, "trust_score", None)
         row["re_auth_required"]          = getattr(ctx, "re_auth_required", None)
-        row["gateway_decision"]          = getattr(ctx, "gateway_decision", None)
         row["session_present"]           = getattr(ctx, "session_present", None)
         row["source_ip_change"]          = getattr(ctx, "source_ip_change", None)
         row["replay_window_violation"]   = getattr(ctx, "replay_window_violation", None)
-        row["behavior_deviation_score"]  = getattr(ctx, "behavior_deviation_score", None)
 
     # ── Phase 0: step latencies ───────────────────────────────────────────────
     if ctx:
@@ -280,9 +304,6 @@ def _build_row(
             row["attack_phase"] = "none"
             row["severity"]     = "none"
 
-    row["anomaly_type"]  = row["attack_type"]   # Phase 2 alias
-    row["anomaly_phase"] = row["attack_phase"]  # Phase 2 alias
-
     # ── Phase 4: replay variant signals ──────────────────────────────────────
     if ctx:
         row["token_age_at_replay"]     = getattr(ctx, "token_age_at_replay",     0.0)
@@ -334,20 +355,20 @@ class OutputViews:
             p.write_text(to_json_log(sequences), encoding="utf-8")
             n = len(_normalise(sequences))
             paths["json"] = p
-            print(f"  JSON log    → {p}  ({n:,} sequences)")
+            _print(f"  JSON log    -> {p}  ({n:,} sequences)")
 
         if save_events:
             p  = self.output_dir / f"{stem}_event_log.csv"
             df = to_event_df(sequences)
             df.to_csv(p, index=False)
             paths["event_csv"] = p
-            print(f"  Event CSV   → {p}  ({len(df):,} rows × {len(df.columns)} cols)")
+            _print(f"  Event CSV   -> {p}  ({len(df):,} rows x {len(df.columns)} cols)")
 
         if save_features:
             p  = self.output_dir / f"{stem}_features.csv"
             df = to_feature_df(sequences)
             df.to_csv(p, index=False)
             paths["feature_csv"] = p
-            print(f"  Feature CSV → {p}  ({len(df):,} rows × {len(df.columns)} cols)")
+            _print(f"  Feature CSV -> {p}  ({len(df):,} rows x {len(df.columns)} cols)")
 
         return paths
