@@ -40,196 +40,427 @@ st.markdown("""
 <link rel="stylesheet"
   href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 
 <style>
   :root {
     --accent: #4f9cf0;
     --accent-2: #6f5cf0;
-    --card: rgba(255,255,255,0.025);
-    --card-border: rgba(255,255,255,0.07);
+    --accent-3: #36d6c3;
+    --accent-glow: rgba(79,156,240,0.55);
+    --grad: linear-gradient(135deg, #4f9cf0 0%, #6f5cf0 55%, #8b5cf6 100%);
+    --grad-soft: linear-gradient(135deg, rgba(79,156,240,0.16), rgba(111,92,240,0.13));
+    --card: rgba(255,255,255,0.028);
+    --card-2: rgba(255,255,255,0.04);
+    --card-border: rgba(255,255,255,0.08);
+    --card-border-hi: rgba(79,156,240,0.42);
     --muted: rgba(201,209,217,0.55);
+    --text: #e8edf4;
+    --shadow: 0 18px 48px -24px rgba(0,0,0,0.85);
+    --shadow-hi: 0 24px 60px -22px rgba(79,156,240,0.45);
   }
 
   html, body, [class*="css"], [data-testid="stAppViewContainer"] {
     font-family: 'Inter', -apple-system, sans-serif;
+    color: var(--text);
   }
 
-  /* App background with soft glow */
+  /* ── Animated aurora background ─────────────────────────────────────────── */
   [data-testid="stAppViewContainer"] {
     background:
-      radial-gradient(1100px 520px at 78% -12%, rgba(79,156,240,0.10), transparent 60%),
-      radial-gradient(900px 500px at 8% 8%, rgba(111,92,240,0.07), transparent 55%),
-      #0b0e14;
+      radial-gradient(1100px 520px at 78% -12%, rgba(79,156,240,0.13), transparent 60%),
+      radial-gradient(900px 500px at 8% 6%, rgba(111,92,240,0.10), transparent 55%),
+      radial-gradient(760px 460px at 92% 88%, rgba(54,214,195,0.07), transparent 60%),
+      #080a10;
   }
-  [data-testid="stAppViewContainer"] > .main { padding-top: 1.2rem; }
-  .block-container { padding-top: 2rem; max-width: 1300px; }
+  [data-testid="stAppViewContainer"]::before {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(620px 620px at 18% 22%, rgba(111,92,240,0.10), transparent 62%),
+      radial-gradient(680px 680px at 82% 78%, rgba(79,156,240,0.10), transparent 62%);
+    animation: drift 22s ease-in-out infinite alternate;
+  }
+  @keyframes drift {
+    0%   { transform: translate3d(0,0,0) scale(1); opacity: 0.85; }
+    100% { transform: translate3d(0,-26px,0) scale(1.06); opacity: 1; }
+  }
+  /* faint grid overlay for a "telemetry" feel */
+  [data-testid="stAppViewContainer"]::after {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(1200px 800px at 50% 0%, #000 30%, transparent 80%);
+  }
+  [data-testid="stAppViewContainer"] > .main { padding-top: 1.2rem; position: relative; z-index: 1; }
+  .block-container { padding-top: 2rem; max-width: 1300px; position: relative; z-index: 1; }
 
-  /* Sidebar */
+  /* entrance animation for top-level blocks */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .block-container > div > div > [data-testid="stVerticalBlock"] > div { animation: fadeUp 0.5s cubic-bezier(.2,.7,.3,1) both; }
+
+  /* custom scrollbar */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(79,156,240,0.4), rgba(111,92,240,0.4));
+    border-radius: 999px; border: 2px solid transparent; background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #4f9cf0, #6f5cf0); background-clip: padding-box; }
+
+  /* ── Top header band: slim + reveal on hover ───────────────────────────── */
+  [data-testid="stHeader"] {
+    height: 2.3rem !important;
+    min-height: 2.3rem !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    opacity: 0.1;
+    transition: opacity 0.28s ease, background 0.28s ease;
+  }
+  [data-testid="stHeader"]:hover {
+    opacity: 1;
+    background: rgba(8,10,16,0.72) !important;
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  [data-testid="stToolbar"] { right: 0.4rem; top: 0.15rem; }
+  /* recolour the thin top decoration line to the brand gradient */
+  [data-testid="stDecoration"] {
+    background-image: var(--grad) !important;
+    height: 2px !important;
+  }
+
+  /* ── Sidebar ───────────────────────────────────────────────────────────── */
   [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0e121b 0%, #0a0d13 100%);
+    background: linear-gradient(180deg, #0d111a 0%, #090c12 100%);
     border-right: 1px solid rgba(255,255,255,0.06);
+    box-shadow: 14px 0 40px -28px rgba(0,0,0,0.9);
   }
   [data-testid="stSidebar"] > div:first-child { padding: 1.4rem 0.9rem; }
 
-  /* Typography */
-  h1 { font-size: 1.6rem !important; font-weight: 700 !important; letter-spacing: -0.02em; }
-  h2 { font-size: 1.1rem  !important; font-weight: 600 !important; letter-spacing: -0.01em; }
+  /* ── Typography ────────────────────────────────────────────────────────── */
+  h1 { font-family: 'Space Grotesk','Inter',sans-serif; font-size: 1.65rem !important; font-weight: 700 !important; letter-spacing: -0.02em; }
+  h2 { font-size: 1.12rem  !important; font-weight: 600 !important; letter-spacing: -0.01em; }
   h3 { font-size: 0.95rem !important; font-weight: 600 !important; }
 
   .section-label {
     font-size: 0.66rem; font-weight: 700;
-    letter-spacing: 0.1em; text-transform: uppercase;
-    color: var(--muted); margin: 1rem 0 0.4rem;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); margin: 1.05rem 0 0.45rem;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-label::after {
+    content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, rgba(255,255,255,0.10), transparent);
   }
 
-  /* Brand block */
+  /* ── Brand block ───────────────────────────────────────────────────────── */
   .brand-block {
-    display: flex; align-items: center; gap: 11px;
+    display: flex; align-items: center; gap: 12px;
     padding-bottom: 1rem;
     border-bottom: 1px solid rgba(255,255,255,0.07);
     margin-bottom: 0.5rem;
   }
   .brand-icon {
-    width: 38px; height: 38px; border-radius: 11px;
-    background: linear-gradient(135deg, rgba(79,156,240,0.25), rgba(111,92,240,0.25));
-    border: 1px solid rgba(79,156,240,0.3);
+    position: relative;
+    width: 40px; height: 40px; border-radius: 12px;
+    background: var(--grad-soft);
+    border: 1px solid rgba(79,156,240,0.32);
     display: flex; align-items: center; justify-content: center;
-    font-size: 19px; color: #6fb0f5;
+    font-size: 19px; color: #8cc2ff;
+    box-shadow: 0 0 0 1px rgba(79,156,240,0.06), 0 8px 22px -10px rgba(79,156,240,0.6);
   }
-  .brand-name { font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; }
-  .brand-sub  { font-size: 0.68rem; color: var(--muted); }
+  .brand-icon::after {
+    content: ""; position: absolute; inset: -1px; border-radius: 12px;
+    background: var(--grad); opacity: 0.0; filter: blur(9px); z-index: -1;
+    transition: opacity 0.3s ease;
+  }
+  .brand-block:hover .brand-icon::after { opacity: 0.45; }
+  .brand-name {
+    font-family: 'Space Grotesk','Inter',sans-serif;
+    font-size: 0.98rem; font-weight: 700; letter-spacing: -0.01em;
+    background: linear-gradient(90deg, #fff, #b9c6ff);
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .brand-sub  { font-size: 0.68rem; color: var(--muted); letter-spacing: 0.03em; }
 
-  /* Sidebar nav buttons */
+  /* ── Sidebar nav buttons ───────────────────────────────────────────────── */
   [data-testid="stSidebar"] .stButton > button {
     width: 100%;
     justify-content: flex-start;
     text-align: left;
-    border-radius: 10px;
+    border-radius: 11px;
     border: 1px solid transparent;
     background: transparent;
-    color: #c9d1d9;
+    color: #c2cbd6;
     font-weight: 500;
-    padding: 0.55rem 0.8rem;
-    transition: all 0.15s ease;
+    padding: 0.58rem 0.85rem;
+    transition: all 0.18s cubic-bezier(.2,.7,.3,1);
   }
   [data-testid="stSidebar"] .stButton > button:hover {
     background: rgba(255,255,255,0.05);
-    border-color: rgba(255,255,255,0.08);
-    color: #fff;
+    border-color: rgba(255,255,255,0.09);
+    color: #fff; transform: translateX(3px);
   }
   /* Active nav (primary) */
   [data-testid="stSidebar"] .stButton > button[kind="primary"],
   [data-testid="stSidebar"] [data-testid="stBaseButton-primary"] {
-    background: linear-gradient(135deg, rgba(79,156,240,0.22), rgba(111,92,240,0.18));
-    border: 1px solid rgba(79,156,240,0.4);
+    background: linear-gradient(135deg, rgba(79,156,240,0.26), rgba(111,92,240,0.20));
+    border: 1px solid rgba(79,156,240,0.45);
     color: #fff;
-    box-shadow: inset 0 0 0 1px rgba(79,156,240,0.06);
+    box-shadow: inset 0 0 0 1px rgba(79,156,240,0.08), 0 10px 26px -16px rgba(79,156,240,0.9);
   }
+  [data-testid="stSidebar"] .stButton > button[kind="primary"]::before {
+    content: ""; position: absolute; left: 6px; top: 50%; transform: translateY(-50%);
+    width: 3px; height: 18px; border-radius: 3px; background: var(--grad);
+    box-shadow: 0 0 10px var(--accent-glow);
+  }
+  [data-testid="stSidebar"] .stButton > button { position: relative; }
 
-  /* Primary action buttons (main area) */
+  /* ── Primary action buttons (main area) ────────────────────────────────── */
   .stButton > button[kind="primary"],
   [data-testid="stBaseButton-primary"] {
-    background: linear-gradient(135deg, #4f9cf0, #6f5cf0);
+    position: relative; overflow: hidden;
+    background: var(--grad);
     border: none; color: #fff; font-weight: 600;
-    border-radius: 10px;
+    border-radius: 11px;
+    box-shadow: 0 12px 30px -12px rgba(79,156,240,0.75);
+    transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
   }
-  .stButton > button[kind="primary"]:hover { filter: brightness(1.08); }
+  .stButton > button[kind="primary"]:hover {
+    filter: brightness(1.08);
+    transform: translateY(-2px);
+    box-shadow: 0 18px 40px -12px rgba(111,92,240,0.85);
+  }
+  .stButton > button[kind="primary"]:active { transform: translateY(0); }
+  /* sheen sweep */
+  .stButton > button[kind="primary"]::after {
+    content: ""; position: absolute; top: 0; left: -120%; width: 60%; height: 100%;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.28), transparent);
+    transform: skewX(-20deg); transition: left 0.6s ease;
+  }
+  .stButton > button[kind="primary"]:hover::after { left: 140%; }
 
-  /* Metric cards */
-  [data-testid="stMetric"] {
-    background: var(--card);
-    border: 1px solid var(--card-border);
-    border-radius: 14px;
-    padding: 14px 16px;
-    transition: border-color 0.15s ease;
+  /* secondary buttons */
+  .stButton > button[kind="secondary"] {
+    border-radius: 11px; border: 1px solid var(--card-border);
+    background: var(--card-2); transition: all 0.16s ease;
   }
-  [data-testid="stMetric"]:hover { border-color: rgba(79,156,240,0.35); }
+  .stButton > button[kind="secondary"]:hover {
+    border-color: var(--card-border-hi); color: #fff;
+    background: rgba(79,156,240,0.08); transform: translateY(-1px);
+  }
+
+  /* ── Metric cards ──────────────────────────────────────────────────────── */
+  [data-testid="stMetric"] {
+    position: relative; overflow: hidden;
+    background: linear-gradient(160deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015));
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 15px 17px;
+    box-shadow: var(--shadow);
+    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  }
+  [data-testid="stMetric"]::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: var(--grad); opacity: 0; transition: opacity 0.18s ease;
+  }
+  [data-testid="stMetric"]:hover {
+    transform: translateY(-3px);
+    border-color: var(--card-border-hi);
+    box-shadow: var(--shadow-hi);
+  }
+  [data-testid="stMetric"]:hover::before { opacity: 1; }
   [data-testid="stMetricLabel"] {
     color: var(--muted); font-size: 0.7rem !important;
-    text-transform: uppercase; letter-spacing: 0.05em;
+    text-transform: uppercase; letter-spacing: 0.07em; font-weight: 600;
   }
-  [data-testid="stMetricValue"] { font-weight: 700; font-size: 1.5rem; }
+  [data-testid="stMetricValue"] {
+    font-family: 'Space Grotesk','Inter',sans-serif;
+    font-weight: 700; font-size: 1.6rem;
+    background: linear-gradient(90deg, #ffffff, #c8d6ff);
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  }
 
-  /* Page header */
-  .page-head { display: flex; align-items: center; gap: 13px; margin-bottom: 0.4rem; }
+  /* ── Page header ───────────────────────────────────────────────────────── */
+  .page-head { display: flex; align-items: center; gap: 14px; margin-bottom: 0.5rem; }
   .page-head-icon {
-    width: 42px; height: 42px; border-radius: 12px;
-    background: linear-gradient(135deg, rgba(79,156,240,0.18), rgba(111,92,240,0.14));
-    border: 1px solid rgba(79,156,240,0.28);
+    position: relative;
+    width: 46px; height: 46px; border-radius: 13px;
+    background: var(--grad-soft);
+    border: 1px solid rgba(79,156,240,0.3);
     display: flex; align-items: center; justify-content: center;
-    color: #6fb0f5; font-size: 21px;
+    color: #8cc2ff; font-size: 22px;
+    box-shadow: 0 10px 26px -12px rgba(79,156,240,0.7);
   }
-  .page-head-title { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
-  .page-head-sub   { font-size: 0.82rem; color: var(--muted); margin-top: 1px; }
+  .page-head-icon::after {
+    content: ""; position: absolute; inset: -2px; border-radius: 13px;
+    background: var(--grad); filter: blur(12px); opacity: 0.30; z-index: -1;
+  }
+  .page-head-title {
+    font-family: 'Space Grotesk','Inter',sans-serif;
+    font-size: 1.55rem; font-weight: 700; letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #ffffff 30%, #a9b8ff);
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .page-head-sub   { font-size: 0.83rem; color: var(--muted); margin-top: 2px; max-width: 720px; }
 
-  /* Panel card */
+  /* ── Panel card ────────────────────────────────────────────────────────── */
   .panel {
     background: var(--card);
     border: 1px solid var(--card-border);
-    border-radius: 16px;
+    border-radius: 18px;
     padding: 1.1rem 1.25rem;
     margin-bottom: 1rem;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(6px);
   }
 
-  /* Status pill */
+  /* ── Status pill ───────────────────────────────────────────────────────── */
   .status-pill {
-    display: inline-flex; align-items: center; gap: 7px;
-    font-size: 0.72rem; font-weight: 500;
-    padding: 6px 11px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 0.72rem; font-weight: 600;
+    padding: 7px 12px; border-radius: 999px;
     border: 1px solid var(--card-border);
+    backdrop-filter: blur(4px);
   }
-  .pill-on  { background: rgba(46,160,67,0.12);  border-color: rgba(46,160,67,0.35);  color: #3fb950; }
+  .pill-on  { background: rgba(46,160,67,0.13);  border-color: rgba(46,160,67,0.4);  color: #56d364; }
   .pill-off { background: rgba(201,209,217,0.06); color: var(--muted); }
-  .dot { width: 7px; height: 7px; border-radius: 50%; }
-  .dot-on  { background: #3fb950; box-shadow: 0 0 8px rgba(63,185,80,0.8); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot-on  { background: #3fb950; box-shadow: 0 0 0 0 rgba(63,185,80,0.7); animation: pulse 2s infinite; }
   .dot-off { background: #8b949e; }
-
-  /* Empty state */
-  .empty-card {
-    text-align: center; padding: 3.5rem 1.5rem;
-    background: var(--card); border: 1px dashed var(--card-border);
-    border-radius: 18px; margin-top: 1rem;
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(63,185,80,0.6); }
+    70%  { box-shadow: 0 0 0 7px rgba(63,185,80,0); }
+    100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); }
   }
-  .empty-icon { font-size: 40px; color: var(--muted); margin-bottom: 0.6rem; }
-  .empty-title { font-size: 1.1rem; font-weight: 600; }
-  .empty-sub { color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem; }
 
-  .chart-title { font-size: 0.78rem; font-weight: 600; color: var(--muted); margin-bottom: 0.5rem; }
-  .stProgress > div > div { background: linear-gradient(90deg,#4f9cf0,#6f5cf0) !important; border-radius: 4px; }
-  hr { border-color: rgba(255,255,255,0.07) !important; margin: 1.1rem 0; }
-  [data-testid="stDownloadButton"] > button { width: 100%; border-radius: 10px !important; font-weight: 600; }
-  [data-testid="stExpander"] { border-radius: 12px !important; border-color: var(--card-border) !important; }
+  /* ── Empty state ───────────────────────────────────────────────────────── */
+  .empty-card {
+    position: relative; overflow: hidden;
+    text-align: center; padding: 3.6rem 1.5rem;
+    background: linear-gradient(160deg, rgba(255,255,255,0.04), rgba(255,255,255,0.012));
+    border: 1px dashed var(--card-border);
+    border-radius: 20px; margin-top: 1rem;
+    box-shadow: var(--shadow);
+  }
+  .empty-card::before {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(420px 200px at 50% 0%, rgba(79,156,240,0.12), transparent 70%);
+    pointer-events: none;
+  }
+  .empty-icon {
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    width: 76px; height: 76px; border-radius: 20px; margin-bottom: 0.9rem;
+    background: var(--grad-soft); border: 1px solid rgba(79,156,240,0.25);
+    font-size: 34px; color: #8cc2ff;
+  }
+  .empty-title { font-size: 1.15rem; font-weight: 700; }
+  .empty-sub { color: var(--muted); font-size: 0.86rem; margin-top: 0.3rem; }
+
+  /* ── Misc ──────────────────────────────────────────────────────────────── */
+  .chart-title {
+    font-size: 0.78rem; font-weight: 700; color: #d6dee9; margin-bottom: 0.55rem;
+    display: flex; align-items: center; gap: 7px; letter-spacing: 0.01em;
+  }
+  .chart-title::before {
+    content: ""; width: 6px; height: 6px; border-radius: 2px;
+    background: var(--grad); box-shadow: 0 0 8px var(--accent-glow);
+  }
+  .stProgress > div > div { background: var(--grad) !important; border-radius: 999px !important; box-shadow: 0 0 14px rgba(79,156,240,0.5); }
+  .stProgress > div { border-radius: 999px !important; }
+  hr { border-color: rgba(255,255,255,0.07) !important; margin: 1.15rem 0; }
+
+  [data-testid="stDownloadButton"] > button {
+    width: 100%; border-radius: 11px !important; font-weight: 600;
+    background: var(--grad) !important; border: none !important; color: #fff !important;
+    box-shadow: 0 12px 30px -14px rgba(79,156,240,0.7);
+    transition: transform 0.16s ease, box-shadow 0.16s ease;
+  }
+  [data-testid="stDownloadButton"] > button:hover {
+    transform: translateY(-2px); box-shadow: 0 18px 38px -14px rgba(111,92,240,0.8);
+  }
+
+  [data-testid="stExpander"] {
+    border-radius: 14px !important; border: 1px solid var(--card-border) !important;
+    background: var(--card) !important; box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  [data-testid="stExpander"] summary:hover { color: #8cc2ff; }
+
+  /* sliders */
+  [data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] {
+    background: var(--grad) !important; border: 2px solid #0b0e14 !important;
+    box-shadow: 0 0 0 3px rgba(79,156,240,0.25) !important;
+  }
+  [data-testid="stSlider"] [data-baseweb="slider"] > div > div > div { background: var(--grad) !important; }
+
+  /* inputs / selects / textareas */
+  [data-testid="stNumberInput"] input,
+  [data-testid="stTextInput"] input,
+  [data-baseweb="select"] > div {
+    border-radius: 10px !important;
+    background: var(--card-2) !important;
+    border-color: var(--card-border) !important;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  }
+  [data-testid="stNumberInput"] input:focus,
+  [data-testid="stTextInput"] input:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px rgba(79,156,240,0.18) !important;
+  }
+
+  /* dataframe container */
+  [data-testid="stDataFrame"] {
+    border-radius: 14px !important; overflow: hidden;
+    border: 1px solid var(--card-border); box-shadow: var(--shadow);
+  }
+
+  /* success / alert tweaks */
+  [data-testid="stAlert"] { border-radius: 12px !important; }
+
+  /* code chips */
+  code { font-family: 'JetBrains Mono', monospace !important; font-size: 0.82em !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ── Theme constants ───────────────────────────────────────────────────────────
-BG      = "#0e1117"
-BG2     = "#1a1d27"
+BG      = "#0b0e14"          # solid reference (pie wedge edges, etc.)
+BG2     = "#141824"
 CLR     = "#c9d1d9"
+GRID    = "#222838"
 
-# One colour per attack type (9 types + normal)
+# One colour per attack type (9 types + normal) — brightened for the dark glass UI
 PALETTE = {
-    "normal":                  "#388bdc",
-    "replay_token":            "#c17d14",
-    "nonce_reuse":             "#e24b4a",
-    "timestamp_inconsistency": "#9b59b6",
-    "duplicate_sequence":      "#2ea043",
-    "impersonation":           "#f39c12",
-    "identity_token_mismatch": "#e74c3c",
-    "access_without_auth":     "#1abc9c",
-    "abnormal_failure_rate":   "#e67e22",
-    "abnormal_renewal":        "#3498db",
+    "normal":                  "#4f9cf0",
+    "replay_token":            "#e0a93b",
+    "nonce_reuse":             "#ef5350",
+    "timestamp_inconsistency": "#b07be8",
+    "duplicate_sequence":      "#37c66f",
+    "impersonation":           "#f6a623",
+    "identity_token_mismatch": "#ff6b6b",
+    "access_without_auth":     "#36d6c3",
+    "abnormal_failure_rate":   "#ff8a4c",
+    "abnormal_renewal":        "#5aa9ff",
 }
 
 plt.rcParams.update({
-    "figure.facecolor": BG,  "axes.facecolor":  BG,
-    "axes.edgecolor":   "#30363d", "axes.labelcolor": CLR,
+    "figure.facecolor": "none",  "axes.facecolor":  "none",   # transparent → blends with cards
+    "savefig.facecolor": "none", "savefig.transparent": True,
+    "axes.edgecolor":   "#2c3344", "axes.labelcolor": CLR,
+    "axes.titlecolor":  "#e8edf4",
     "xtick.color": CLR, "ytick.color": CLR,
-    "text.color":  CLR, "grid.color":  "#21262d",
-    "legend.facecolor": BG2, "legend.edgecolor": "#30363d",
-    "font.size": 8,
+    "text.color":  CLR, "grid.color":  GRID,
+    "grid.linewidth": 0.7, "grid.alpha": 0.35,
+    "legend.facecolor": BG2, "legend.edgecolor": "#2c3344", "legend.framealpha": 0.55,
+    "axes.spines.top": False, "axes.spines.right": False,
+    "font.size": 8, "font.family": "DejaVu Sans",
 })
 
 
@@ -617,17 +848,24 @@ def render_dashboard():
         wedges, texts, autotexts = ax.pie(
             type_counts.values,
             labels=None,
-            autopct="%1.0f%%",
+            autopct=lambda p: f"{p:.0f}%" if p >= 6 else "",
+            pctdistance=0.79,
             colors=colors,
-            textprops={"fontsize": 7, "color": CLR},
-            wedgeprops={"linewidth": 0.5, "edgecolor": BG},
+            textprops={"fontsize": 7, "color": "#ffffff", "fontweight": "bold"},
+            wedgeprops={"linewidth": 2, "edgecolor": BG, "width": 0.42},
             startangle=90,
         )
+        # donut centre — total session count
+        ax.text(0, 0.08, f"{int(type_counts.sum()):,}", ha="center", va="center",
+                fontsize=14, fontweight="bold", color="#ffffff")
+        ax.text(0, -0.16, "sessions", ha="center", va="center",
+                fontsize=6.5, color=CLR)
         ax.legend(
             wedges, type_counts.index,
             loc="lower center", bbox_to_anchor=(0.5, -0.28),
             ncol=2, fontsize=6, framealpha=0.3,
         )
+        fig.tight_layout()
         st.pyplot(fig)
         plt.close()
 
@@ -638,11 +876,13 @@ def render_dashboard():
             subset = df[df["attack_type"] == label]["message_rate"].dropna()
             if not subset.empty:
                 clipped = subset.clip(upper=subset.quantile(0.99))
-                clipped.hist(ax=ax, bins=25, alpha=0.55, label=label, color=color)
+                clipped.hist(ax=ax, bins=25, alpha=0.45, label=label, color=color,
+                             histtype="stepfilled", edgecolor=color, linewidth=1.0)
         ax.set_xlabel("Message rate (msg/s)", fontsize=8)
         ax.set_ylabel("Count", fontsize=8)
         ax.legend(fontsize=6, ncol=2)
         ax.grid(axis="y", alpha=0.3)
+        fig.tight_layout()
         st.pyplot(fig)
         plt.close()
 
@@ -652,11 +892,13 @@ def render_dashboard():
         for label, color in PALETTE.items():
             subset = df[df["attack_type"] == label]["trust_score"].dropna()
             if not subset.empty:
-                subset.hist(ax=ax, bins=20, alpha=0.55, label=label, color=color)
+                subset.hist(ax=ax, bins=20, alpha=0.45, label=label, color=color,
+                            histtype="stepfilled", edgecolor=color, linewidth=1.0)
         ax.set_xlabel("Trust score", fontsize=8)
         ax.set_ylabel("Count", fontsize=8)
         ax.legend(fontsize=6, ncol=2)
         ax.grid(axis="y", alpha=0.3)
+        fig.tight_layout()
         st.pyplot(fig)
         plt.close()
 
@@ -667,9 +909,11 @@ def render_dashboard():
                     if df[c].std() > 0][:24]
         corr = df[num_cols].corr()
         fig, ax = plt.subplots(figsize=(11, 9))
-        sns.heatmap(corr, ax=ax, cmap="coolwarm", center=0,
-                    annot=False, linewidths=0.3, cbar_kws={"shrink": 0.8})
+        sns.heatmap(corr, ax=ax, cmap="mako", center=0,
+                    annot=False, linewidths=0.4, linecolor=BG,
+                    square=True, cbar_kws={"shrink": 0.7, "aspect": 30})
         ax.tick_params(labelsize=6.5)
+        fig.tight_layout()
         st.pyplot(fig)
         plt.close()
 
