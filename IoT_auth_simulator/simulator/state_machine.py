@@ -74,6 +74,7 @@ TRANSITIONS: Dict[Tuple[AuthState, EventType], AuthState] = {
     # ── Registration ──────────────────────────────────────────────────────────
     (AuthState.UNREGISTERED, EventType.REGISTRATION_REQUEST):  AuthState.REGISTERED,
     (AuthState.REGISTERED,   EventType.REGISTRATION_REQUEST):  AuthState.REGISTERED,   # idempotent re-reg (won't fail or cause error the state machine will stay in registered state because the device is already registered)
+    (AuthState.REGISTERED,   EventType.REGISTRATION_CONFIRMED): AuthState.REGISTERED,  # server-side confirmation, state stays REGISTERED (matches FLOW_STATE_AFTER)
 
     # ── Authentication initiation ─────────────────────────────────────────────
     (AuthState.REGISTERED,    EventType.AUTHENTICATION_REQUEST): AuthState.AUTH_REQUESTED,
