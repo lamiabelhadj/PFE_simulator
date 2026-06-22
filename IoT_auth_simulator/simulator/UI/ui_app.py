@@ -378,12 +378,13 @@ st.markdown("""
 
   [data-testid="stDownloadButton"] > button {
     width: 100%; border-radius: 11px !important; font-weight: 600;
-    background: var(--grad) !important; border: none !important; color: #fff !important;
-    box-shadow: 0 12px 30px -14px rgba(79,156,240,0.7);
+    background: linear-gradient(135deg, #36d6c3 0%, #2bb6a6 50%, #37c66f 100%) !important;
+    border: none !important; color: #06231f !important;
+    box-shadow: 0 12px 30px -14px rgba(54,214,195,0.7);
     transition: transform 0.16s ease, box-shadow 0.16s ease;
   }
   [data-testid="stDownloadButton"] > button:hover {
-    transform: translateY(-2px); box-shadow: 0 18px 38px -14px rgba(111,92,240,0.8);
+    transform: translateY(-2px); box-shadow: 0 18px 38px -14px rgba(55,198,111,0.85);
   }
 
   [data-testid="stExpander"] {
@@ -579,15 +580,13 @@ def render_load():
 
     # ── Simulation parameters ────────────────────────────────────────────────
     section_label("Simulation parameters")
-    p1, p2, p3 = st.columns(3)
+    # Device pool is fixed by config (cfg.simulation.num_devices) — not user-tunable.
+    num_devices = cfg.simulation.num_devices
+    p1, p2 = st.columns(2)
     with p1:
-        num_devices = st.slider("Number of devices", 10, 500,
-                                cfg.simulation.num_devices, 10)
-        st.caption(f"{num_devices} unique device IDs")
-    with p2:
         num_normal = st.slider("Normal sessions", 50, 2000,
                                cfg.simulation.num_sessions_normal, 50)
-    with p3:
+    with p2:
         num_attack = st.slider("Attack sessions", 10, 500,
                                cfg.simulation.num_sessions_attack, 10)
 
@@ -632,11 +631,12 @@ def render_load():
     # ── Live preview ─────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     section_label("Preview")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Device pool",     f"{num_devices:,}")
-    c2.metric("Normal sessions", f"{num_normal:,}")
-    c3.metric("Attack sessions", f"{num_attack:,}")
-    c4.metric("Total sessions",  f"{num_normal + num_attack:,}")
+    c2.metric("Gateways",        f"{cfg.simulation.num_gateways:,}")
+    c3.metric("Normal sessions", f"{num_normal:,}")
+    c4.metric("Attack sessions", f"{num_attack:,}")
+    c5.metric("Total sessions",  f"{num_normal + num_attack:,}")
 
     st.markdown("<br>", unsafe_allow_html=True)
     run_col, _ = st.columns([1, 2])
@@ -680,16 +680,28 @@ def render_load():
         st.session_state["csv_path"] = csv_path
         st.session_state["elapsed"]  = elapsed
 
-        # Download the freshly generated dataset right away
-        event_csv_name = csv_path.name.replace("_features.csv", "_event_log.csv")
-        st.download_button(
-            label=f"Download dataset — {event_csv_name}",
-            data=st.session_state["event_df"].to_csv(index=False).encode("utf-8"),
-            file_name=event_csv_name,
-            mime="text/csv",
-            use_container_width=True,
-            icon=":material/download:",
-        )
+        # Download both views of the freshly generated dataset right away
+        feature_csv_name = csv_path.name                                       # <stem>_features.csv
+        event_csv_name   = csv_path.name.replace("_features.csv", "_event_log.csv")
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                label=f"Feature CSV — {feature_csv_name}",
+                data=st.session_state["df"].to_csv(index=False).encode("utf-8"),
+                file_name=feature_csv_name,
+                mime="text/csv",
+                use_container_width=True,
+                icon=":material/download:",
+            )
+        with dl2:
+            st.download_button(
+                label=f"Event log CSV — {event_csv_name}",
+                data=st.session_state["event_df"].to_csv(index=False).encode("utf-8"),
+                file_name=event_csv_name,
+                mime="text/csv",
+                use_container_width=True,
+                icon=":material/download:",
+            )
 
         # Quick jump to results
         j1, j2, _ = st.columns([1, 1, 2])
@@ -797,14 +809,29 @@ def render_numbers():
         f'<h2>{icon("download", 15, "margin-right:6px;")} Export</h2>',
         unsafe_allow_html=True,
     )
-    event_csv_name = csv_path.name.replace("_features.csv", "_event_log.csv")
-    st.download_button(
-        label=f"Download CSV — {event_csv_name}",
-        data=event_df.to_csv(index=False).encode("utf-8"),
-        file_name=event_csv_name,
-        mime="text/csv",
-        use_container_width=True,
-    )
+    st.caption("Two views of the same run — the per-session feature table (for ML) "
+               "and the per-event authentication log.")
+    feature_csv_name = csv_path.name                                       # <stem>_features.csv
+    event_csv_name   = csv_path.name.replace("_features.csv", "_event_log.csv")
+    e1, e2 = st.columns(2)
+    with e1:
+        st.download_button(
+            label=f"Feature CSV — {feature_csv_name}",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name=feature_csv_name,
+            mime="text/csv",
+            use_container_width=True,
+            icon=":material/download:",
+        )
+    with e2:
+        st.download_button(
+            label=f"Event log CSV — {event_csv_name}",
+            data=event_df.to_csv(index=False).encode("utf-8"),
+            file_name=event_csv_name,
+            mime="text/csv",
+            use_container_width=True,
+            icon=":material/download:",
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
