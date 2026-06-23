@@ -80,6 +80,11 @@ class Device:
         )
     )
 
+    # ── Firmware ───────────────────────────────────────────────────────────────
+    firmware_version: str = field(
+        default_factory=lambda: random.choice(cfg.device.firmware_versions)
+    )
+
     # ── State machine ─────────────────────────────────────────────────────────
     state: DeviceState = field(default=DeviceState.IDLE)
 

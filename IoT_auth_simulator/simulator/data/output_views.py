@@ -107,6 +107,13 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
         pd.to_datetime(df["timestamp"], unit="s")
           .dt.strftime("%Y-%m-%d %H:%M:%S")
     )
+    # token_expiry is also a Unix timestamp — render it the same way, leaving
+    # rows without a token blank rather than showing "NaT".
+    if "token_expiry" in df.columns:
+        expiry_dt = pd.to_datetime(df["token_expiry"], unit="s", errors="coerce")
+        df["token_expiry"] = (
+            expiry_dt.dt.strftime("%Y-%m-%d %H:%M:%S").where(expiry_dt.notna(), None)
+        )
     ordered = [
         "event_id", "event_type", "timestamp",
         "delay_since_previous_event",
@@ -116,7 +123,7 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
         "result", "failure_reason", "retry_count",
         "token_id", "token_expiry", "token_scope",
         "nonce", "identity_claim",
-        "client_id", "topic", "resource_id",
+        "topic", "resource_id",
         "firmware_version", "source_context", "anomaly_label", "attack_type",
     ]
     extra = [c for c in df.columns if c not in ordered]

@@ -26,6 +26,7 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Tuple
 
+from simulator.config.settings import cfg
 from simulator.event_model import AuthEvent, AuthState, EventResult, EventType
 from simulator.state_machine import StateMachine, TransitionError
 from simulator.engines.scenario_engine import ScenarioSpec
@@ -108,6 +109,22 @@ NONCE_CARRYING_EVENTS = {
     EventType.NONCE_RECEIVED,
     EventType.RESPONSE_SENT,
 }
+
+# Events that operate on an MQTT topic (session/authorization/access context).
+TOPIC_CARRYING_EVENTS = {
+    EventType.SESSION_OPENED,
+    EventType.ACCESS_REQUEST, EventType.ACCESS_GRANTED, EventType.ACCESS_DENIED,
+}
+
+# Events that target a specific protected resource.
+RESOURCE_CARRYING_EVENTS = {
+    EventType.ACCESS_REQUEST, EventType.ACCESS_GRANTED, EventType.ACCESS_DENIED,
+}
+
+# OAuth2/ACE token scopes granted at issuance (one per session).
+TOKEN_SCOPES = [
+    "telemetry:read", "telemetry:readwrite", "telemetry:write", "config:read",
+]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -236,22 +253,26 @@ class EventEngine:
 
     def __init__(
         self,
-        device_id:      str,
-        gateway_id:     str,
-        auth_server_id: str,
-        broker_id:      Optional[str]   = None,
-        source_ip:      Optional[str]   = None,
-        battery_level:  Optional[float] = None,
-        start_time:     Optional[float] = None,
+        device_id:        str,
+        gateway_id:       str,
+        auth_server_id:   str,
+        broker_id:        Optional[str]   = None,
+        source_ip:        Optional[str]   = None,
+        battery_level:    Optional[float] = None,
+        firmware_version: Optional[str]   = None,
+        start_time:       Optional[float] = None,
     ):
-        self.device_id      = device_id
-        self.gateway_id     = gateway_id
-        self.auth_server_id = auth_server_id
-        self.broker_id      = broker_id
-        self.source_ip      = source_ip or f"10.0.1.{random.randint(1, 254)}"
-        self.battery_level  = battery_level if battery_level is not None \
-                              else round(random.uniform(0.0, 100.0), 1)
-        self.start_time     = start_time or time.time()
+        self.device_id        = device_id
+        self.gateway_id       = gateway_id
+        self.auth_server_id   = auth_server_id
+        self.broker_id        = broker_id
+        self.source_ip        = source_ip or f"10.0.1.{random.randint(1, 254)}"
+        self.battery_level    = battery_level if battery_level is not None \
+                                else round(random.uniform(0.0, 100.0), 1)
+        self.firmware_version = firmware_version or random.choice(
+            cfg.device.firmware_versions
+        )
+        self.start_time       = start_time or time.time()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Main entry point
@@ -276,6 +297,12 @@ class EventEngine:
         retry_count = 0
         is_attack  = spec.is_anomaly
         profile    = DELAY_PROFILE_ATTACK if is_attack else DELAY_PROFILE_NORMAL
+
+        # ── Session-level MQTT / token context (one value per session) ─────────
+        topic:        str             = f"iot/{self.device_id[:8]}/telemetry"
+        resource_id:  str             = f"resource://{self.device_id[:8]}/telemetry"
+        token_scope:  str             = random.choice(TOKEN_SCOPES)
+        token_expiry: Optional[float] = None   # set once a token is issued
 
         # Phase 3 — temporal tracker for this session
         te = TemporalEngine(config=TemporalConfig(), is_attack=is_attack)
@@ -338,7 +365,11 @@ class EventEngine:
             # ── Update shared token/nonce context ─────────────────────────────
             if event_type == EventType.TOKEN_ISSUED:
                 token_id = str(uuid.uuid4())
+                token_expiry = current_ts + cfg.security.token_lifetime_s
                 te.record_token_issued(current_ts)       # Phase 3
+            if event_type == EventType.RENEWAL_REQUEST:
+                # Renewal extends the token's lifetime from the renewal moment.
+                token_expiry = current_ts + cfg.security.token_lifetime_s
             if event_type == EventType.TOKEN_PRESENTED:
                 te.record_token_presented(current_ts)    # Phase 3
             if event_type == EventType.CHALLENGE_SENT:
@@ -384,14 +415,19 @@ class EventEngine:
             elif event_type == EventType.ACCESS_DENIED:
                 ctx["topic_scope_violation"] = 1 if random.random() < 0.3 else 0
 
+            ev_token_id = token_id if event_type in TOKEN_CARRYING_EVENTS else None
             ev = self._make_event(
                 event_type=event_type, prev_state=prev_state,
                 new_state=new_state, result=result,
                 failure_reason=failure_reason, session_id=session_id,
                 scenario_id=spec.scenario_id, timestamp=current_ts,
                 delay=delay, retry_count=retry_count,
-                token_id=token_id if event_type in TOKEN_CARRYING_EVENTS else None,
+                token_id=ev_token_id,
+                token_expiry=token_expiry if ev_token_id else None,
+                token_scope=token_scope if ev_token_id else None,
                 nonce=nonce if event_type in NONCE_CARRYING_EVENTS else None,
+                topic=topic if event_type in TOPIC_CARRYING_EVENTS else None,
+                resource_id=resource_id if event_type in RESOURCE_CARRYING_EVENTS else None,
                 anomaly_label=None,
             )
             events.append(ev)
@@ -480,14 +516,19 @@ class EventEngine:
                 else (nonce if spec.injection_event in NONCE_CARRYING_EVENTS else None)
             )
 
+            inj_token_id = token_id if spec.injection_event in TOKEN_CARRYING_EVENTS else None
             ev = self._make_event(
                 event_type=spec.injection_event, prev_state=spec.injection_from_state,
                 new_state=new_state, result=EventResult.FAILURE,
                 failure_reason=f"invalid_transition_{spec.anomaly_type}",
                 session_id=session_id, scenario_id=spec.scenario_id,
                 timestamp=current_ts, delay=delay, retry_count=retry_count,
-                token_id=token_id if spec.injection_event in TOKEN_CARRYING_EVENTS else None,
+                token_id=inj_token_id,
+                token_expiry=token_expiry if inj_token_id else None,
+                token_scope=token_scope if inj_token_id else None,
                 nonce=injected_nonce,
+                topic=topic if spec.injection_event in TOPIC_CARRYING_EVENTS else None,
+                resource_id=resource_id if spec.injection_event in RESOURCE_CARRYING_EVENTS else None,
                 anomaly_label=spec.anomaly_type,
                 identity_claim=identity_claim,
             )
@@ -701,7 +742,11 @@ class EventEngine:
         token_id:       Optional[str],
         nonce:          Optional[str],
         anomaly_label:  Optional[str],
-        identity_claim: Optional[str] = None,
+        identity_claim: Optional[str]   = None,
+        token_expiry:   Optional[float] = None,
+        token_scope:    Optional[str]   = None,
+        topic:          Optional[str]   = None,
+        resource_id:    Optional[str]   = None,
     ) -> AuthEvent:
         return AuthEvent(
             event_type                 = event_type,
@@ -718,8 +763,13 @@ class EventEngine:
             timestamp                  = timestamp,
             delay_since_previous_event = delay,
             token_id                   = token_id,
+            token_expiry               = token_expiry,
+            token_scope                = token_scope,
             nonce                      = nonce,
             retry_count                = retry_count,
+            topic                      = topic,
+            resource_id                = resource_id,
+            firmware_version           = self.firmware_version,
             anomaly_label              = anomaly_label,
             identity_claim             = identity_claim,
             source_context             = "attack" if anomaly_label else "normal",

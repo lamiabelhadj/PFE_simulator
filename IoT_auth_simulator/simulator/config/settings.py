@@ -110,6 +110,11 @@ class DeviceConfig:
         # "smart_meter",
     ])
 
+    # Firmware versions reported by devices (categorical event-log feature)
+    firmware_versions: List[str] = field(default_factory=lambda: [
+        "1.0.4", "1.2.0", "1.4.2", "2.0.1", "2.1.3", "2.3.0", "3.0.0",
+    ])
+
     # Keep-alive window (seconds) for MQTT
     keep_alive_normal_s: int = 60
     keep_alive_short_s:  int = 10    # suspicious / attack pattern

@@ -165,7 +165,7 @@ class AuthEvent:
     timestamp + delay_since_previous    → replay window, timestamp inconsistency
     result + failure_reason + retry_count → abnormal failure rate
     previous_state + new_state          → step-order anomalies
-    client_id + topic + resource_id     → minimal MQTT/IoT context 
+    topic + resource_id                 → minimal MQTT/IoT context
     token_expiry                        → abnormal renewal frequency
     identity_claim                      → device impersonation
     anomaly_label                       → ground truth for ML training
@@ -207,7 +207,6 @@ class AuthEvent:
     # ── MQTT / IoT context ────────────────────────────
     # Only a minimal application context is kept — not a full broker simulation.
     broker_id:   Optional[str] = field(default=None)
-    client_id:   Optional[str] = field(default=None)   # MQTT logical client identity
     topic:       Optional[str] = field(default=None)   # topic / resource requested
     resource_id: Optional[str] = field(default=None)
 
@@ -263,7 +262,6 @@ class AuthEvent:
             # Temporal
             "delay_since_previous_event": round(self.delay_since_previous_event, 4),
             # MQTT / IoT context
-            "client_id":                  self.client_id,
             "topic":                      self.topic,
             "resource_id":                self.resource_id,
             # Metadata

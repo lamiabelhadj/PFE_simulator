@@ -61,12 +61,13 @@ def run_simulation(
         gateway_id = gateway_ids[i % len(gateway_ids)]
 
         engine = EventEngine(
-            device_id      = device.device_id,
-            gateway_id     = gateway_id,
-            auth_server_id = auth_server_id,
-            broker_id      = broker_id,
-            source_ip      = device.ip_address,
-            battery_level  = device.battery_level,
+            device_id        = device.device_id,
+            gateway_id       = gateway_id,
+            auth_server_id   = auth_server_id,
+            broker_id        = broker_id,
+            source_ip        = device.ip_address,
+            battery_level    = device.battery_level,
+            firmware_version = device.firmware_version,
         )
         pair = engine.execute(spec)
         sequences.append(pair)
