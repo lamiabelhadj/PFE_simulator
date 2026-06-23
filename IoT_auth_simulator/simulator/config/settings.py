@@ -32,8 +32,8 @@ class SimulationConfig:
 
     # Volume
     num_devices:          int = 200    # total IoT devices to simulate
-    num_sessions_normal:  int = 800    # benign authentication sessions
-    num_sessions_attack:  int = 200    # malicious sessions (split across attack types)
+    num_sessions_normal:  int = 1000    # benign authentication sessions
+    num_sessions_attack:  int = 100   # malicious sessions (split across attack types)
 
     # Attack type distribution (must sum to 1.0)
     attack_distribution: Dict[str, float] = field(default_factory=lambda: {
