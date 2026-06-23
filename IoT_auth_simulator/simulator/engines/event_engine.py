@@ -126,6 +126,15 @@ TOKEN_SCOPES = [
     "telemetry:read", "telemetry:readwrite", "telemetry:write", "config:read",
 ]
 
+# Deterministic, benign steps that must never be flagged as a random transient
+# failure. Registration (UNREGISTERED→REGISTERED and the idempotent
+# REGISTERED→REGISTERED re-registration / confirmation) is always legitimate,
+# so it should never produce a "transient_error" failure on a valid transition.
+RELIABLE_EVENTS = {
+    EventType.REGISTRATION_REQUEST,
+    EventType.REGISTRATION_CONFIRMED,
+}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SessionContext — all Phase 0 features not derivable from AuthEvent alone
@@ -792,6 +801,10 @@ class EventEngine:
         }
         if event_type in failure_events:
             return EventResult.FAILURE, event_type.value
-        if not is_anomaly and random.random() < 0.02:
+        # Registration is deterministic and benign — exempt it from the random
+        # transient failure so a legitimate REGISTERED→REGISTERED transition is
+        # never mislabelled as a failure.
+        if (event_type not in RELIABLE_EVENTS
+                and not is_anomaly and random.random() < 0.02):
             return EventResult.FAILURE, "transient_error"
         return EventResult.SUCCESS, None
