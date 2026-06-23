@@ -673,14 +673,23 @@ def render_load():
         status_text.empty()
 
         csv_path = save(sequences, filename=out_name, parquet=save_parquet)
-        st.success(f"Completed in {elapsed:.1f}s — saved to `{csv_path}`")
 
         st.session_state["df"]       = to_feature_df(sequences)
         st.session_state["event_df"] = to_event_df(sequences)
-        st.session_state["csv_path"] = csv_path
+        st.session_state["csv_path"] = str(csv_path)
         st.session_state["elapsed"]  = elapsed
+        st.success(f"Completed in {elapsed:.1f}s — saved to `{csv_path}`")
 
-        # Download both views of the freshly generated dataset right away
+    # ── Downloads + quick jump (persist across reruns) ───────────────────────
+    # Rendered outside the run-button block: clicking a download button triggers
+    # a Streamlit rerun (with run_btn back to False), so gating these on the
+    # stored dataset keeps both buttons on screen — you can grab the other view,
+    # or re-download either one, as many times as you like.
+    if "df" in st.session_state and "csv_path" in st.session_state:
+        st.markdown("<br>", unsafe_allow_html=True)
+        section_label("Download dataset")
+
+        csv_path         = Path(st.session_state["csv_path"])
         feature_csv_name = csv_path.name                                       # <stem>_features.csv
         event_csv_name   = csv_path.name.replace("_features.csv", "_event_log.csv")
         dl1, dl2 = st.columns(2)
@@ -692,6 +701,7 @@ def render_load():
                 mime="text/csv",
                 use_container_width=True,
                 icon=":material/download:",
+                key="load_dl_feature",
             )
         with dl2:
             st.download_button(
@@ -701,16 +711,18 @@ def render_load():
                 mime="text/csv",
                 use_container_width=True,
                 icon=":material/download:",
+                key="load_dl_event",
             )
 
         # Quick jump to results
         j1, j2, _ = st.columns([1, 1, 2])
         with j1:
-            if st.button("View Numbers", use_container_width=True):
+            if st.button("View Numbers", use_container_width=True, key="load_jump_numbers"):
                 st.session_state.page = "Numbers"
                 st.rerun()
         with j2:
-            if st.button("Open Dashboard", use_container_width=True, type="primary"):
+            if st.button("Open Dashboard", use_container_width=True, type="primary",
+                         key="load_jump_dashboard"):
                 st.session_state.page = "Dashboard"
                 st.rerun()
 
@@ -747,61 +759,122 @@ def render_numbers():
     m4.metric("Attack sess.",   f"{attack_n:,}")
     m5.metric("Runtime",        f"{elapsed:.1f}s")
 
-    # ── Anomaly signal summary ───────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown(
-        f'<h2>{icon("radar", 15, "margin-right:6px;")} Anomaly signal summary</h2>',
-        unsafe_allow_html=True,
-    )
-    st.caption("Mean of each Phase 4/5 anomaly signal, grouped by attack type.")
+    st.markdown("<br>", unsafe_allow_html=True)
+    tab_feat, tab_evt = st.tabs([
+        "  Feature CSV — per session",
+        "  Event log — per event",
+    ])
 
-    sig_cols = [
-        "replay_window_violation", "token_age_at_replay",
-        "nonce_age_at_reuse", "timestamp_delta_s",
-        "duplicate_session_count", "identity_claim_mismatch",
-        "token_device_mismatch", "unauthorized_access_attempt",
-        "failed_auth_count", "re_auth_required",
-    ]
-    sig_cols_present = [c for c in sig_cols if c in df.columns]
-    if sig_cols_present:
-        sig_df = (
-            df[["attack_type"] + sig_cols_present]
-            .groupby("attack_type")[sig_cols_present]
-            .mean()
-            .round(3)
+    # ── Tab: Feature CSV (one row per session) ───────────────────────────────
+    with tab_feat:
+        st.markdown(
+            f'<h2>{icon("radar", 15, "margin-right:6px;")} Anomaly signal summary</h2>',
+            unsafe_allow_html=True,
         )
-        st.dataframe(sig_df, use_container_width=True)
+        st.caption("Mean of each Phase 4/5 anomaly signal, grouped by attack type.")
 
-    # ── Sample rows (per-event log) ──────────────────────────────────────────
-    st.markdown("---")
-    st.markdown(
-        f'<h2>{icon("list-details", 15, "margin-right:6px;")} Sample rows '
-        f'<span style="opacity:0.5;font-size:0.8rem;">(one row per event)</span></h2>',
-        unsafe_allow_html=True,
-    )
-    if "attack_type" in event_df.columns:
-        col_f, _ = st.columns([2, 5])
-        with col_f:
-            filter_type = st.selectbox(
-                "Filter by attack type",
-                ["All"] + sorted(event_df["attack_type"].unique().tolist()),
-                label_visibility="collapsed",
+        sig_cols = [
+            "replay_window_violation", "token_age_at_replay",
+            "nonce_age_at_reuse", "timestamp_delta_s",
+            "duplicate_session_count", "identity_claim_mismatch",
+            "token_device_mismatch", "unauthorized_access_attempt",
+            "failed_auth_count", "re_auth_required",
+        ]
+        sig_cols_present = [c for c in sig_cols if c in df.columns]
+        if sig_cols_present:
+            sig_df = (
+                df[["attack_type"] + sig_cols_present]
+                .groupby("attack_type")[sig_cols_present]
+                .mean()
+                .round(3)
             )
-        view_df = event_df if filter_type == "All" \
-                  else event_df[event_df["attack_type"] == filter_type]
-    else:
-        view_df = event_df
-    st.dataframe(view_df.head(100), use_container_width=True, height=320)
+            st.dataframe(sig_df, use_container_width=True)
 
-    # ── Attack phase breakdown ───────────────────────────────────────────────
-    with st.expander("Attack phase breakdown"):
-        phase_df = (
-            df[df["is_anomaly"] == 1]
-            .groupby(["attack_type", "attack_phase"])
-            .size()
-            .reset_index(name="count")
+        # Sample rows (one per session), filterable by attack type
+        st.markdown("---")
+        st.markdown(
+            f'<h2>{icon("table", 15, "margin-right:6px;")} Sample rows '
+            f'<span style="opacity:0.5;font-size:0.8rem;">(one row per session)</span></h2>',
+            unsafe_allow_html=True,
         )
-        st.dataframe(phase_df, use_container_width=True)
+        if "attack_type" in df.columns:
+            col_f, _ = st.columns([2, 5])
+            with col_f:
+                feat_filter = st.selectbox(
+                    "Filter by attack type",
+                    ["All"] + sorted(df["attack_type"].unique().tolist()),
+                    label_visibility="collapsed",
+                    key="numbers_feat_filter",
+                )
+            feat_view = df if feat_filter == "All" \
+                        else df[df["attack_type"] == feat_filter]
+        else:
+            feat_view = df
+        st.dataframe(feat_view.head(100), use_container_width=True, height=320)
+
+        with st.expander("Descriptive statistics (numeric features)"):
+            st.dataframe(
+                df.describe().T.round(3), use_container_width=True
+            )
+
+        with st.expander("Attack phase breakdown"):
+            phase_df = (
+                df[df["is_anomaly"] == 1]
+                .groupby(["attack_type", "attack_phase"])
+                .size()
+                .reset_index(name="count")
+            )
+            st.dataframe(phase_df, use_container_width=True)
+
+    # ── Tab: Event log (one row per event) ───────────────────────────────────
+    with tab_evt:
+        n_fail = (
+            int((event_df["result"].astype(str).str.lower() == "failure").sum())
+            if "result" in event_df.columns else 0
+        )
+        ev1, ev2, ev3, ev4 = st.columns(4)
+        ev1.metric("Total events", f"{len(event_df):,}")
+        ev2.metric("Event types",
+                   f"{event_df['event_type'].nunique():,}"
+                   if "event_type" in event_df.columns else "—")
+        ev3.metric("Failures", f"{n_fail:,}")
+        ev4.metric("Failure rate",
+                   f"{(n_fail / len(event_df) * 100):.1f}%" if len(event_df) else "0%")
+
+        # Event-type counts
+        if "event_type" in event_df.columns:
+            st.markdown("---")
+            st.markdown(
+                f'<h2>{icon("list-tree", 15, "margin-right:6px;")} Event type counts</h2>',
+                unsafe_allow_html=True,
+            )
+            et_counts = (
+                event_df["event_type"].value_counts()
+                .rename_axis("event_type").reset_index(name="count")
+            )
+            st.dataframe(et_counts, use_container_width=True, height=260)
+
+        # Sample rows (one per event), filterable by attack type
+        st.markdown("---")
+        st.markdown(
+            f'<h2>{icon("list-details", 15, "margin-right:6px;")} Sample rows '
+            f'<span style="opacity:0.5;font-size:0.8rem;">(one row per event)</span></h2>',
+            unsafe_allow_html=True,
+        )
+        if "attack_type" in event_df.columns:
+            col_f, _ = st.columns([2, 5])
+            with col_f:
+                filter_type = st.selectbox(
+                    "Filter by attack type",
+                    ["All"] + sorted(event_df["attack_type"].unique().tolist()),
+                    label_visibility="collapsed",
+                    key="numbers_event_filter",
+                )
+            view_df = event_df if filter_type == "All" \
+                      else event_df[event_df["attack_type"] == filter_type]
+        else:
+            view_df = event_df
+        st.dataframe(view_df.head(100), use_container_width=True, height=320)
 
     # ── Download ─────────────────────────────────────────────────────────────
     st.markdown("---")
@@ -822,6 +895,7 @@ def render_numbers():
             mime="text/csv",
             use_container_width=True,
             icon=":material/download:",
+            key="numbers_dl_feature",
         )
     with e2:
         st.download_button(
@@ -831,6 +905,7 @@ def render_numbers():
             mime="text/csv",
             use_container_width=True,
             icon=":material/download:",
+            key="numbers_dl_event",
         )
 
 
@@ -863,86 +938,179 @@ def render_dashboard():
     m4.metric("Attack sess.",  f"{attack_n:,}")
 
     st.markdown("<br>", unsafe_allow_html=True)
+    tab_feat, tab_evt = st.tabs([
+        "  Feature CSV — per session",
+        "  Event log — per event",
+    ])
 
-    # ── Charts ───────────────────────────────────────────────────────────────
-    ch1, ch2, ch3 = st.columns(3)
+    # ── Tab: Feature CSV charts (one row per session) ────────────────────────
+    with tab_feat:
+        ch1, ch2, ch3 = st.columns(3)
 
-    with ch1:
-        chart_title("Attack type distribution")
-        type_counts = df["attack_type"].value_counts()
-        colors = [PALETTE.get(k, "#888") for k in type_counts.index]
-        fig, ax = plt.subplots(figsize=(4, 3.2))
-        wedges, texts, autotexts = ax.pie(
-            type_counts.values,
-            labels=None,
-            autopct=lambda p: f"{p:.0f}%" if p >= 6 else "",
-            pctdistance=0.79,
-            colors=colors,
-            textprops={"fontsize": 7, "color": "#ffffff", "fontweight": "bold"},
-            wedgeprops={"linewidth": 2, "edgecolor": BG, "width": 0.42},
-            startangle=90,
-        )
-        # donut centre — total session count
-        ax.text(0, 0.08, f"{int(type_counts.sum()):,}", ha="center", va="center",
-                fontsize=14, fontweight="bold", color="#ffffff")
-        ax.text(0, -0.16, "sessions", ha="center", va="center",
-                fontsize=6.5, color=CLR)
-        ax.legend(
-            wedges, type_counts.index,
-            loc="lower center", bbox_to_anchor=(0.5, -0.28),
-            ncol=2, fontsize=6, framealpha=0.3,
-        )
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close()
+        with ch1:
+            chart_title("Attack type distribution")
+            type_counts = df["attack_type"].value_counts()
+            colors = [PALETTE.get(k, "#888") for k in type_counts.index]
+            fig, ax = plt.subplots(figsize=(4, 3.2))
+            wedges, texts, autotexts = ax.pie(
+                type_counts.values,
+                labels=None,
+                autopct=lambda p: f"{p:.0f}%" if p >= 6 else "",
+                pctdistance=0.79,
+                colors=colors,
+                textprops={"fontsize": 7, "color": "#ffffff", "fontweight": "bold"},
+                wedgeprops={"linewidth": 2, "edgecolor": BG, "width": 0.42},
+                startangle=90,
+            )
+            # donut centre — total session count
+            ax.text(0, 0.08, f"{int(type_counts.sum()):,}", ha="center", va="center",
+                    fontsize=14, fontweight="bold", color="#ffffff")
+            ax.text(0, -0.16, "sessions", ha="center", va="center",
+                    fontsize=6.5, color=CLR)
+            ax.legend(
+                wedges, type_counts.index,
+                loc="lower center", bbox_to_anchor=(0.5, -0.28),
+                ncol=2, fontsize=6, framealpha=0.3,
+            )
+            fig.tight_layout()
+            st.pyplot(fig)
+            plt.close()
 
-    with ch2:
-        chart_title("Message rate by attack type")
-        fig, ax = plt.subplots(figsize=(4, 3.2))
-        for label, color in PALETTE.items():
-            subset = df[df["attack_type"] == label]["message_rate"].dropna()
-            if not subset.empty:
-                clipped = subset.clip(upper=subset.quantile(0.99))
-                clipped.hist(ax=ax, bins=25, alpha=0.45, label=label, color=color,
-                             histtype="stepfilled", edgecolor=color, linewidth=1.0)
-        ax.set_xlabel("Message rate (msg/s)", fontsize=8)
-        ax.set_ylabel("Count", fontsize=8)
-        ax.legend(fontsize=6, ncol=2)
-        ax.grid(axis="y", alpha=0.3)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close()
+        with ch2:
+            chart_title("Message rate by attack type")
+            fig, ax = plt.subplots(figsize=(4, 3.2))
+            for label, color in PALETTE.items():
+                subset = df[df["attack_type"] == label]["message_rate"].dropna()
+                if not subset.empty:
+                    clipped = subset.clip(upper=subset.quantile(0.99))
+                    clipped.hist(ax=ax, bins=25, alpha=0.45, label=label, color=color,
+                                 histtype="stepfilled", edgecolor=color, linewidth=1.0)
+            ax.set_xlabel("Message rate (msg/s)", fontsize=8)
+            ax.set_ylabel("Count", fontsize=8)
+            ax.legend(fontsize=6, ncol=2)
+            ax.grid(axis="y", alpha=0.3)
+            fig.tight_layout()
+            st.pyplot(fig)
+            plt.close()
 
-    with ch3:
-        chart_title("Trust score distribution")
-        fig, ax = plt.subplots(figsize=(4, 3.2))
-        for label, color in PALETTE.items():
-            subset = df[df["attack_type"] == label]["trust_score"].dropna()
-            if not subset.empty:
-                subset.hist(ax=ax, bins=20, alpha=0.45, label=label, color=color,
-                            histtype="stepfilled", edgecolor=color, linewidth=1.0)
-        ax.set_xlabel("Trust score", fontsize=8)
-        ax.set_ylabel("Count", fontsize=8)
-        ax.legend(fontsize=6, ncol=2)
-        ax.grid(axis="y", alpha=0.3)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close()
+        with ch3:
+            chart_title("Trust score distribution")
+            fig, ax = plt.subplots(figsize=(4, 3.2))
+            for label, color in PALETTE.items():
+                subset = df[df["attack_type"] == label]["trust_score"].dropna()
+                if not subset.empty:
+                    subset.hist(ax=ax, bins=20, alpha=0.45, label=label, color=color,
+                                histtype="stepfilled", edgecolor=color, linewidth=1.0)
+            ax.set_xlabel("Trust score", fontsize=8)
+            ax.set_ylabel("Count", fontsize=8)
+            ax.legend(fontsize=6, ncol=2)
+            ax.grid(axis="y", alpha=0.3)
+            fig.tight_layout()
+            st.pyplot(fig)
+            plt.close()
 
-    # ── Correlation heatmap ──────────────────────────────────────────────────
-    st.markdown("---")
-    with st.expander("Feature correlation heatmap", expanded=True):
-        num_cols = [c for c in df.select_dtypes(include="number").columns
-                    if df[c].std() > 0][:24]
-        corr = df[num_cols].corr()
-        fig, ax = plt.subplots(figsize=(11, 9))
-        sns.heatmap(corr, ax=ax, cmap="mako", center=0,
-                    annot=False, linewidths=0.4, linecolor=BG,
-                    square=True, cbar_kws={"shrink": 0.7, "aspect": 30})
-        ax.tick_params(labelsize=6.5)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close()
+        # Correlation heatmap
+        st.markdown("---")
+        with st.expander("Feature correlation heatmap", expanded=True):
+            num_cols = [c for c in df.select_dtypes(include="number").columns
+                        if df[c].std() > 0][:24]
+            corr = df[num_cols].corr()
+            fig, ax = plt.subplots(figsize=(11, 9))
+            sns.heatmap(corr, ax=ax, cmap="mako", center=0,
+                        annot=False, linewidths=0.4, linecolor=BG,
+                        square=True, cbar_kws={"shrink": 0.7, "aspect": 30})
+            ax.tick_params(labelsize=6.5)
+            fig.tight_layout()
+            st.pyplot(fig)
+            plt.close()
+
+    # ── Tab: Event log charts (one row per event) ────────────────────────────
+    with tab_evt:
+        ec1, ec2, ec3 = st.columns(3)
+
+        with ec1:
+            chart_title("Event type distribution")
+            if "event_type" in event_df.columns:
+                et_counts = event_df["event_type"].value_counts().sort_values()
+                cmap = plt.get_cmap("viridis")
+                bar_colors = [cmap(i / max(len(et_counts) - 1, 1))
+                              for i in range(len(et_counts))]
+                fig, ax = plt.subplots(figsize=(4, 3.2))
+                ax.barh(et_counts.index.astype(str), et_counts.values,
+                        color=bar_colors, edgecolor=BG, linewidth=0.6)
+                ax.set_xlabel("Count", fontsize=8)
+                ax.tick_params(labelsize=6.5)
+                fig.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+            else:
+                st.caption("No event_type column available.")
+
+        with ec2:
+            chart_title("Result breakdown")
+            if "result" in event_df.columns:
+                res_counts = event_df["result"].astype(str).str.lower().value_counts()
+                res_palette = {"success": "#37c66f", "failure": "#ef5350",
+                               "pending": "#e0a93b"}
+                res_colors = [res_palette.get(k, "#888") for k in res_counts.index]
+                fig, ax = plt.subplots(figsize=(4, 3.2))
+                wedges, _texts, _auto = ax.pie(
+                    res_counts.values,
+                    labels=None,
+                    autopct=lambda p: f"{p:.0f}%" if p >= 4 else "",
+                    pctdistance=0.78,
+                    colors=res_colors,
+                    textprops={"fontsize": 7, "color": "#ffffff", "fontweight": "bold"},
+                    wedgeprops={"linewidth": 2, "edgecolor": BG, "width": 0.42},
+                    startangle=90,
+                )
+                ax.text(0, 0.08, f"{int(res_counts.sum()):,}", ha="center", va="center",
+                        fontsize=14, fontweight="bold", color="#ffffff")
+                ax.text(0, -0.16, "events", ha="center", va="center",
+                        fontsize=6.5, color=CLR)
+                ax.legend(wedges, res_counts.index,
+                          loc="lower center", bbox_to_anchor=(0.5, -0.20),
+                          ncol=3, fontsize=6, framealpha=0.3)
+                fig.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+            else:
+                st.caption("No result column available.")
+
+        with ec3:
+            chart_title("Events by attack type")
+            if "attack_type" in event_df.columns:
+                at_counts = event_df["attack_type"].value_counts()
+                at_colors = [PALETTE.get(k, "#888") for k in at_counts.index]
+                fig, ax = plt.subplots(figsize=(4, 3.2))
+                ax.bar(range(len(at_counts)), at_counts.values,
+                       color=at_colors, edgecolor=BG, linewidth=0.6)
+                ax.set_xticks(range(len(at_counts)))
+                ax.set_xticklabels(at_counts.index, rotation=60, ha="right", fontsize=6)
+                ax.set_ylabel("Events", fontsize=8)
+                ax.grid(axis="y", alpha=0.3)
+                fig.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+            else:
+                st.caption("No attack_type column available.")
+
+        # Top failure reasons
+        if "failure_reason" in event_df.columns:
+            reasons = event_df["failure_reason"].dropna()
+            reasons = reasons[reasons.astype(str).str.strip() != ""]
+            if not reasons.empty:
+                st.markdown("---")
+                with st.expander("Top failure reasons", expanded=True):
+                    top = reasons.value_counts().head(12).sort_values()
+                    fig, ax = plt.subplots(figsize=(11, max(2.4, 0.34 * len(top))))
+                    ax.barh(top.index.astype(str), top.values,
+                            color="#ef5350", edgecolor=BG, linewidth=0.6)
+                    ax.set_xlabel("Count", fontsize=8)
+                    ax.tick_params(labelsize=7)
+                    fig.tight_layout()
+                    st.pyplot(fig)
+                    plt.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
