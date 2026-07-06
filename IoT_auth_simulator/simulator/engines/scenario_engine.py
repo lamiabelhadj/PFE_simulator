@@ -118,6 +118,66 @@ NORMAL_FLOW_WITH_RENEWAL: List[EventType] = [
     EventType.SESSION_CLOSED,
 ]
 
+# Canonical authentication prefix (NORMAL_FLOW up to and including SESSION_OPENED).
+# Every full session starts with this; the in-session access activity and the
+# ending are what vary. Anomaly injection positions are all within this prefix,
+# so a session can carry arbitrary trailing activity without affecting them.
+AUTH_PREFIX: List[EventType] = list(NORMAL_FLOW[:11])   # 11 events → SESSION_OPEN
+
+# One benign access cycle (request → granted).
+CLEAN_ACCESS_CYCLE: List[EventType] = [
+    EventType.ACCESS_REQUEST,
+    EventType.ACCESS_GRANTED,
+]
+
+# A benign access attempt that is denied (topic scope) then retried and granted.
+# Realistic, and its odd length helps populate odd n_events values.
+DENIED_ACCESS_CYCLE: List[EventType] = [
+    EventType.ACCESS_REQUEST,
+    EventType.ACCESS_DENIED,
+    EventType.RETRY,
+    EventType.ACCESS_GRANTED,
+]
+
+
+def build_session_flow() -> List[EventType]:
+    """
+    Build one benign full-session flow with randomised length.
+
+    Structure: AUTH_PREFIX → 1..4 access cycles (occasionally a denied-then-
+    retried one) → an ending that is usually a clean SESSION_CLOSED, sometimes
+    an abrupt DISCONNECT (incomplete closure), and occasionally nothing at all
+    (session left open). Varying the cycle count and the ending spreads
+    n_events across a broad range of BOTH parities, so completed anomalies
+    (which carry one extra injected event) land on values that normal sessions
+    also occupy — no length is class-exclusive.
+    """
+    steps = list(AUTH_PREFIX)
+    for _ in range(random.choices([1, 2, 3, 4], weights=[45, 30, 15, 10])[0]):
+        if random.random() < 0.18:
+            steps += DENIED_ACCESS_CYCLE
+        else:
+            steps += CLEAN_ACCESS_CYCLE
+
+    r = random.random()
+    if r < 0.72:
+        steps.append(EventType.SESSION_CLOSED)   # clean close
+    elif r < 0.85:
+        steps.append(EventType.DISCONNECT)       # abrupt drop → incomplete closure
+    # else (~15%): no terminal event — session left open (odd-length tail)
+    return steps
+
+
+def build_partial_flow() -> List[EventType]:
+    """
+    Build a short benign session that drops out early (flaky device / lost
+    link): the first k canonical steps with no clean close. Covers the low
+    n_events range that overlaps the (short) truncated anomaly sessions, so
+    a short session is no longer implicitly anomalous.
+    """
+    k = random.randint(3, 12)
+    return list(NORMAL_FLOW[:k])
+
 # ── State checkpoints within NORMAL_FLOW ─────────────────────────────────────
 # Maps EventType → the AuthState the SM will be in AFTER that event fires.
 # Used by the scenario engine to pick a sensible injection_position.
@@ -217,12 +277,19 @@ class ScenarioEngine:
     # ── Single scenario factories ──────────────────────────────────────────────
 
     def normal(self) -> ScenarioSpec:
-        """Generate one normal (benign) scenario spec — pure happy path."""
+        """
+        Generate one normal (benign) scenario spec.
+
+        Uses build_session_flow() so the happy path has a randomised number of
+        access cycles and a varied ending (clean close / abrupt disconnect /
+        left open) — giving normal sessions a broad, both-parity n_events
+        distribution that overlaps the anomaly sessions.
+        """
         return ScenarioSpec(
             scenario_id   = str(uuid.uuid4()),
             scenario_type = "normal",
             is_anomaly    = False,
-            normal_steps  = list(NORMAL_FLOW),
+            normal_steps  = build_session_flow(),
         )
 
     def normal_with_retry(self) -> ScenarioSpec:
@@ -251,6 +318,22 @@ class ScenarioEngine:
             scenario_type = "normal",
             is_anomaly    = False,
             normal_steps  = list(NORMAL_FLOW_WITH_RENEWAL),
+        )
+
+    def normal_partial(self) -> ScenarioSpec:
+        """
+        Normal session that drops out early (flaky device / lost link) after a
+        random number of steps, with no clean close.
+
+        Produces short, incomplete benign sessions whose low n_events overlaps
+        the truncated anomaly sessions — so a short session is no longer an
+        implicit anomaly marker.
+        """
+        return ScenarioSpec(
+            scenario_id   = str(uuid.uuid4()),
+            scenario_type = "normal",
+            is_anomaly    = False,
+            normal_steps  = build_partial_flow(),
         )
 
     # ── Phase 4: named replay variant factories ───────────────────────────────
@@ -344,11 +427,16 @@ class ScenarioEngine:
 
         position = ANOMALY_INJECTION_POSITION.get(anomaly_type, 2)
 
+        # Base flow uses the same randomised builder as normal sessions. All
+        # injection positions fall within AUTH_PREFIX, so the variable trailing
+        # activity does not affect where the anomaly is injected — but when the
+        # EventEngine continues the flow after injection, the continued session
+        # inherits the same varied length distribution as normal sessions.
         return ScenarioSpec(
             scenario_id          = str(uuid.uuid4()),
             scenario_type        = anomaly_type,
             is_anomaly           = True,
-            normal_steps         = list(NORMAL_FLOW),
+            normal_steps         = build_session_flow(),
             anomaly_type         = anomaly_type,
             injection_position   = position,
             injection_from_state = from_state,
@@ -359,11 +447,12 @@ class ScenarioEngine:
 
     def batch(
         self,
-        n_normal:     int,
-        n_attack:     int,
-        distribution: Dict[str, float],
-        retry_ratio:   float = 0.20,
-        renewal_ratio: float = 0.15,
+        n_normal:      int,
+        n_attack:      int,
+        distribution:  Dict[str, float],
+        retry_ratio:   float = 0.15,
+        renewal_ratio: float = 0.12,
+        partial_ratio: float = 0.20,
     ) -> List[ScenarioSpec]:
         """
         Generate a mixed list of normal + anomaly specs in random order.
@@ -375,9 +464,16 @@ class ScenarioEngine:
         distribution  : {anomaly_type: fraction} — must sum to 1.0
         retry_ratio   : fraction of normal sessions that use the retry flow
         renewal_ratio : fraction of normal sessions that use the renewal flow
+        partial_ratio : fraction of normal sessions that drop out early
+                        (short, incomplete benign sessions)
 
-        The remaining normal sessions use the pure happy-path flow.
-        retry_ratio + renewal_ratio must be <= 1.0.
+        The remaining normal sessions use build_session_flow() (randomised
+        access activity and ending). retry + renewal + partial must sum to
+        <= 1.0. The partial sessions populate the low n_events range, and the
+        randomised full sessions populate a broad both-parity range, so benign
+        sessions overlap the anomaly sessions on session length and on the
+        session-lifecycle outcomes (access-granted / clean-close) rather than
+        being perfectly separable from them.
 
         Returns
         -------
@@ -385,22 +481,25 @@ class ScenarioEngine:
         """
         if abs(sum(distribution.values()) - 1.0) > 1e-6:
             raise ValueError("attack distribution must sum to 1.0")
-        if retry_ratio + renewal_ratio > 1.0:
-            raise ValueError("retry_ratio + renewal_ratio must be <= 1.0")
+        if retry_ratio + renewal_ratio + partial_ratio > 1.0:
+            raise ValueError("retry + renewal + partial ratios must sum to <= 1.0")
 
         specs: List[ScenarioSpec] = []
 
-        # Normal — split into three sub-types
+        # Normal — randomised full sessions plus retry / renewal / early-drop
         n_retry   = int(n_normal * retry_ratio)
         n_renewal = int(n_normal * renewal_ratio)
-        n_pure    = n_normal - n_retry - n_renewal
+        n_partial = int(n_normal * partial_ratio)
+        n_full    = n_normal - n_retry - n_renewal - n_partial
 
-        for _ in range(n_pure):
+        for _ in range(n_full):
             specs.append(self.normal())
         for _ in range(n_retry):
             specs.append(self.normal_with_retry())
         for _ in range(n_renewal):
             specs.append(self.normal_with_renewal())
+        for _ in range(n_partial):
+            specs.append(self.normal_partial())
 
         # Attack — split by distribution
         counts = self._split_counts(n_attack, distribution)

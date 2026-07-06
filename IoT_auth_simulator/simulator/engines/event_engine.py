@@ -135,6 +135,71 @@ RELIABLE_EVENTS = {
     EventType.REGISTRATION_CONFIRMED,
 }
 
+# ── Anomaly session continuation policy ───────────────────────────────────────
+# Fraction of each anomaly type whose session RESUMES the legitimate flow after
+# the injected event, instead of ending on the anomaly. Without this, every
+# anomaly is truncated at the injection point and therefore never reaches
+# SESSION_OPENED / ACCESS_GRANTED / SESSION_CLOSED — which turns those features
+# (and n_events) into a perfect label shortcut.
+#
+# Only the "in-session" replay/renewal family continues: for these the anomaly
+# is an extra/replayed event while an otherwise-working session proceeds. The
+# identity / unauthorized / lockout attacks (impersonation, identity_token_
+# mismatch, access_without_auth, abnormal_failure_rate) legitimately terminate
+# on the anomaly, and their honest signals (identity_claim_mismatch,
+# unauthorized_access_attempt, …) carry the discriminative information instead.
+CONTINUE_AFTER_INJECTION: Dict[str, float] = {
+    "replay_token":            0.60,
+    "nonce_reuse":             0.60,
+    "timestamp_inconsistency": 0.50,
+    "abnormal_renewal":        0.70,
+    "duplicate_sequence":      0.70,
+    "impersonation":           0.0,
+    "identity_token_mismatch": 0.0,
+    "access_without_auth":     0.0,
+    "abnormal_failure_rate":   0.0,
+}
+
+# Realistic TCP handshake flag combinations observed at connection level.
+# A completed connection almost always shows the full handshake regardless of
+# whether the application-layer behaviour is malicious, so the distribution
+# overlaps heavily between classes (only a mild skew toward half-open / reset
+# for attacks). This avoids tcp_flags being a perfect discriminator.
+_TCP_FLAG_CHOICES = ["SYN,ACK", "SYN,ACK,PSH", "SYN,ACK,FIN", "SYN", "SYN,ACK,RST"]
+
+# Common MQTT keep-alive values (seconds). Same support for both classes so no
+# single value is class-exclusive; attacks merely lean shorter.
+_KEEP_ALIVE_CHOICES = [10, 15, 30, 60, 120, 300]
+
+# Attack types where the pairing (ECDH) handshake itself is more likely to fail.
+# Most attacks operate AFTER a successful pairing, so pairing usually succeeds
+# for both classes.
+_PAIRING_FAIL_PROB = {
+    "impersonation":           0.35,
+    "identity_token_mismatch": 0.30,
+    "access_without_auth":     0.25,
+}
+
+
+def _sample_tcp_flags(is_attack: bool) -> str:
+    """Sample a TCP-flags combination that overlaps across classes."""
+    weights = [58, 18, 8, 10, 6] if is_attack else [64, 22, 10, 3, 1]
+    return random.choices(_TCP_FLAG_CHOICES, weights, k=1)[0]
+
+
+def _sample_keep_alive(is_attack: bool) -> int:
+    """Sample an MQTT keep-alive value from a shared, overlapping distribution."""
+    weights = [12, 18, 22, 28, 12, 8] if is_attack else [4, 8, 20, 34, 20, 14]
+    return random.choices(_KEEP_ALIVE_CHOICES, weights, k=1)[0]
+
+
+def _sample_pairing_result(is_attack: bool, anomaly_type: Optional[str]) -> int:
+    """Pairing succeeds for the vast majority of sessions in both classes."""
+    if not is_attack:
+        return 0 if random.random() < 0.03 else 1
+    fail_prob = _PAIRING_FAIL_PROB.get(anomaly_type, 0.08)
+    return 0 if random.random() < fail_prob else 1
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SessionContext — all Phase 0 features not derivable from AuthEvent alone
@@ -300,21 +365,29 @@ class EventEngine:
         sm         = StateMachine()
         events:    List[AuthEvent] = []
         session_id = str(uuid.uuid4())
-        token_id:  Optional[str] = None
-        nonce:     Optional[str] = None
-        current_ts = self.start_time
-        retry_count = 0
         is_attack  = spec.is_anomaly
         profile    = DELAY_PROFILE_ATTACK if is_attack else DELAY_PROFILE_NORMAL
 
         # ── Session-level MQTT / token context (one value per session) ─────────
-        topic:        str             = f"iot/{self.device_id[:8]}/telemetry"
-        resource_id:  str             = f"resource://{self.device_id[:8]}/telemetry"
-        token_scope:  str             = random.choice(TOKEN_SCOPES)
-        token_expiry: Optional[float] = None   # set once a token is issued
+        topic:        str = f"iot/{self.device_id[:8]}/telemetry"
+        resource_id:  str = f"resource://{self.device_id[:8]}/telemetry"
+        token_scope:  str = random.choice(TOKEN_SCOPES)
 
         # Phase 3 — temporal tracker for this session
         te = TemporalEngine(config=TemporalConfig(), is_attack=is_attack)
+
+        # ── Mutable run-state threaded through every step (see _run_step) ──────
+        rs: Dict = {
+            "current_ts":   self.start_time,
+            "token_id":     None,          # set once a token is issued
+            "token_expiry": None,
+            "nonce":        None,
+            "retry_count":  0,
+            "session_id":   session_id,
+            "topic":        topic,
+            "resource_id":  resource_id,
+            "token_scope":  token_scope,
+        }
 
         # ── Accumulators for SessionContext ───────────────────────────────────
         ctx: Dict = {
@@ -355,107 +428,20 @@ class EventEngine:
         )
 
         for event_type in steps_to_run:
-            # Phase 3: use retry backoff delay for RETRY events
-            if event_type == EventType.RETRY:
-                delay = te.next_retry_delay()
-            else:
-                delay = self._sample_delay(event_type, profile)
-            current_ts = current_ts + delay
-            prev_state = sm.state
-            result, failure_reason = self._outcome(event_type, is_anomaly=False)
-
-            try:
-                new_state = sm.advance(event_type)
-            except TransitionError:
-                new_state      = prev_state
-                result         = EventResult.FAILURE
-                failure_reason = "unexpected_transition_error"
-
-            # ── Update shared token/nonce context ─────────────────────────────
-            if event_type == EventType.TOKEN_ISSUED:
-                token_id = str(uuid.uuid4())
-                token_expiry = current_ts + cfg.security.token_lifetime_s
-                te.record_token_issued(current_ts)       # Phase 3
-            if event_type == EventType.RENEWAL_REQUEST:
-                # Renewal extends the token's lifetime from the renewal moment.
-                token_expiry = current_ts + cfg.security.token_lifetime_s
-            if event_type == EventType.TOKEN_PRESENTED:
-                te.record_token_presented(current_ts)    # Phase 3
-            if event_type == EventType.CHALLENGE_SENT:
-                nonce = hashlib.blake2s(uuid.uuid4().bytes).hexdigest()[:16]
-                te.record_nonce_issued(current_ts)       # Phase 3
-            if event_type in {EventType.AUTHENTICATION_FAILURE, EventType.TOKEN_REJECTED}:
-                retry_count          += 1
-                ctx["failed_auth_count"] += 1
-                te.record_failure()                      # Phase 3
-            if event_type == EventType.RETRY:
-                ctx["n_retries_fired"] += 1
-
-            # ── Capture step latencies ────────────────────────────────────────
-            delay_ms = delay * 1000
-            if event_type == EventType.REGISTRATION_REQUEST:
-                ctx["s1_latency_ms"] = round(delay_ms, 2)
-            elif event_type == EventType.CHALLENGE_SENT and ctx["s2_latency_ms"] == 0.0:
-                # capture only the first challenge (retry scenario has two)
-                ctx["s2_latency_ms"]      = round(delay_ms, 2)
-                ctx["pairing_latency_ms"] = round(delay_ms, 2)
-            elif event_type == EventType.AUTHENTICATION_SUCCESS:
-                ctx["s3_latency_ms"]      = round(delay_ms, 2)
-                ctx["auth_latency_ms"]    = round(delay_ms, 2)
-                ctx["final_auth_result"]  = 1
-                ctx["connack_code"]       = "success"
-                ctx["credential_status"]  = 1
-            elif event_type == EventType.AUTHENTICATION_FAILURE:
-                # Only update s3 if we haven't succeeded yet
-                if ctx["final_auth_result"] == 0:
-                    ctx["s3_latency_ms"]   = round(delay_ms, 2)
-                    ctx["auth_latency_ms"] = round(delay_ms, 2)
-                ctx["connack_code"] = failure_reason or "auth_failure"
-            elif event_type == EventType.TOKEN_ISSUED and ctx["s4_latency_ms"] == 0.0:
-                ctx["s4_latency_ms"] = round(delay_ms, 2)
-            elif event_type == EventType.SESSION_OPENED:
-                ctx["s5_latency_ms"]        = round(delay_ms, 2)
-                ctx["authorization_result"] = 1
-                ctx["session_present"]      = 1
-            elif event_type == EventType.RENEWAL_REQUEST:
-                ctx["s6_latency_ms"]    = round(delay_ms, 2)
-                ctx["re_auth_required"] = 1
-                te.record_renewal(current_ts)            # Phase 3: reset token clock
-            elif event_type == EventType.ACCESS_DENIED:
-                ctx["topic_scope_violation"] = 1 if random.random() < 0.3 else 0
-
-            ev_token_id = token_id if event_type in TOKEN_CARRYING_EVENTS else None
-            ev = self._make_event(
-                event_type=event_type, prev_state=prev_state,
-                new_state=new_state, result=result,
-                failure_reason=failure_reason, session_id=session_id,
-                scenario_id=spec.scenario_id, timestamp=current_ts,
-                delay=delay, retry_count=retry_count,
-                token_id=ev_token_id,
-                token_expiry=token_expiry if ev_token_id else None,
-                token_scope=token_scope if ev_token_id else None,
-                nonce=nonce if event_type in NONCE_CARRYING_EVENTS else None,
-                topic=topic if event_type in TOPIC_CARRYING_EVENTS else None,
-                resource_id=resource_id if event_type in RESOURCE_CARRYING_EVENTS else None,
-                anomaly_label=None,
-            )
-            events.append(ev)
-
-        # ── Set final auth_result from accumulated state ───────────────────────
-        ctx["auth_result"] = ctx["final_auth_result"]
+            self._run_step(event_type, sm, rs, ctx, te, events, profile, spec)
 
         # ── Anomaly injection ─────────────────────────────────────────────────
         if spec.is_anomaly:
-            delay      = self._sample_delay(spec.injection_event, profile)
-            current_ts = current_ts + delay
+            delay          = self._sample_delay(spec.injection_event, profile)
+            rs["current_ts"] += delay
 
             # ── Phase 4: per-variant enrichment before state machine step ────────
 
             # replay_token: token presented well outside the allowed replay window
             if spec.anomaly_type == "replay_token":
                 stolen_age = random.uniform(120, 600)
-                te.record_token_issued(current_ts - stolen_age)
-                te.record_token_presented(current_ts)
+                te.record_token_issued(rs["current_ts"] - stolen_age)
+                te.record_token_presented(rs["current_ts"])
                 ctx["replay_window_violation"] = 1
                 ctx["token_age_at_replay"]     = round(stolen_age, 2)
 
@@ -463,20 +449,22 @@ class EventEngine:
             # nonce stays as-is — we deliberately do NOT generate a new one here.
             # The same value will appear on both the original NONCE_RECEIVED event
             # and this injected event, making output_views count it as a reuse.
-            if spec.anomaly_type == "nonce_reuse" and nonce is not None:
-                ctx["nonce_age_at_reuse"] = round(te.nonce_age(current_ts), 2)
+            if spec.anomaly_type == "nonce_reuse" and rs["nonce"] is not None:
+                ctx["nonce_age_at_reuse"] = round(te.nonce_age(rs["current_ts"]), 2)
 
             # timestamp_inconsistency: record the backward-jump magnitude before applying
             if spec.anomaly_type == "timestamp_inconsistency":
-                delta       = random.uniform(400, 900)
-                current_ts  = current_ts - delta
+                delta            = random.uniform(400, 900)
+                rs["current_ts"] = rs["current_ts"] - delta
                 ctx["timestamp_delta_s"] = round(delta, 2)
 
             # duplicate_sequence: a complete auth sequence replayed inside open session
             if spec.anomaly_type == "duplicate_sequence":
                 ctx["duplicate_session_count"] = 1
 
-            prev_state = sm.state
+            # State the legitimate flow had reached before the injection — the
+            # continuation (below) resumes from here so the session can complete.
+            pre_injection_state = sm.state
             sm.force(spec.injection_from_state)
 
             try:
@@ -500,7 +488,7 @@ class EventEngine:
                 # Attacker presents a token issued for a *different* device.
                 # Overwrite token_id with a foreign one so it never matches
                 # the token that was (or would have been) issued in this session.
-                token_id = f"foreign-{str(uuid.uuid4())}"
+                rs["token_id"]                 = f"foreign-{str(uuid.uuid4())}"
                 identity_claim                 = f"victim-{str(uuid.uuid4())[:8]}"
                 ctx["identity_claim"]          = identity_claim
                 ctx["credential_status"]       = 0
@@ -510,7 +498,6 @@ class EventEngine:
             elif spec.anomaly_type == "access_without_auth":
                 # Device tries to access a resource before any auth has completed.
                 ctx["credential_status"]              = 0  # no auth = no valid credential
-                ctx["auth_result"]                    = 0
                 ctx["unauthorized_access_attempt"]    = 1
                 ctx["steps_before_access"]            = spec.injection_position
 
@@ -520,20 +507,20 @@ class EventEngine:
             # For nonce_reuse injection: carry the original nonce so output_views
             # detects the duplicate (same nonce value on two distinct events).
             injected_nonce = (
-                nonce
+                rs["nonce"]
                 if spec.anomaly_type == "nonce_reuse"
-                else (nonce if spec.injection_event in NONCE_CARRYING_EVENTS else None)
+                else (rs["nonce"] if spec.injection_event in NONCE_CARRYING_EVENTS else None)
             )
 
-            inj_token_id = token_id if spec.injection_event in TOKEN_CARRYING_EVENTS else None
+            inj_token_id = rs["token_id"] if spec.injection_event in TOKEN_CARRYING_EVENTS else None
             ev = self._make_event(
                 event_type=spec.injection_event, prev_state=spec.injection_from_state,
                 new_state=new_state, result=EventResult.FAILURE,
                 failure_reason=f"invalid_transition_{spec.anomaly_type}",
                 session_id=session_id, scenario_id=spec.scenario_id,
-                timestamp=current_ts, delay=delay, retry_count=retry_count,
+                timestamp=rs["current_ts"], delay=delay, retry_count=rs["retry_count"],
                 token_id=inj_token_id,
-                token_expiry=token_expiry if inj_token_id else None,
+                token_expiry=rs["token_expiry"] if inj_token_id else None,
                 token_scope=token_scope if inj_token_id else None,
                 nonce=injected_nonce,
                 topic=topic if spec.injection_event in TOPIC_CARRYING_EVENTS else None,
@@ -543,9 +530,131 @@ class EventEngine:
             )
             events.append(ev)
 
+            # ── Continuation: resume the legitimate flow for a fraction of the
+            # in-session replay/renewal anomalies so they can still reach
+            # SESSION_OPENED / ACCESS_GRANTED / SESSION_CLOSED and overlap normal
+            # sessions on n_events (breaking those as label shortcuts). ─────────
+            if (spec.injection_position < len(spec.normal_steps)
+                    and random.random() < CONTINUE_AFTER_INJECTION.get(spec.anomaly_type, 0.0)):
+                sm.force(pre_injection_state)
+                for event_type in spec.normal_steps[spec.injection_position:]:
+                    self._run_step(event_type, sm, rs, ctx, te, events, profile, spec)
+
+        # ── Final auth_result reflects the accumulated state (post-continuation) ─
+        ctx["auth_result"] = ctx["final_auth_result"]
+
         # ── Build SessionContext ───────────────────────────────────────────────
         context = self._build_context(spec, events, ctx, te)
         return events, context
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Single-step executor (one AuthEvent from one EventType)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _run_step(
+        self,
+        event_type: EventType,
+        sm:         StateMachine,
+        rs:         Dict,
+        ctx:        Dict,
+        te:         "TemporalEngine",
+        events:     List[AuthEvent],
+        profile:    Dict[EventType, Tuple[float, float]],
+        spec:       ScenarioSpec,
+    ) -> None:
+        """
+        Execute one legitimate flow step: advance the state machine, update the
+        shared token/nonce/latency context (rs / ctx), and append the AuthEvent.
+
+        Used for both the pre-injection steps and the optional post-injection
+        continuation, so every completed session — normal or anomalous — goes
+        through exactly the same event-construction path.
+        """
+        # Phase 3: use retry backoff delay for RETRY events
+        if event_type == EventType.RETRY:
+            delay = te.next_retry_delay()
+        else:
+            delay = self._sample_delay(event_type, profile)
+        rs["current_ts"] += delay
+        prev_state = sm.state
+        result, failure_reason = self._outcome(event_type, is_anomaly=False)
+
+        try:
+            new_state = sm.advance(event_type)
+        except TransitionError:
+            new_state      = prev_state
+            result         = EventResult.FAILURE
+            failure_reason = "unexpected_transition_error"
+
+        # ── Update shared token/nonce context ─────────────────────────────────
+        if event_type == EventType.TOKEN_ISSUED:
+            rs["token_id"]     = str(uuid.uuid4())
+            rs["token_expiry"] = rs["current_ts"] + cfg.security.token_lifetime_s
+            te.record_token_issued(rs["current_ts"])         # Phase 3
+        if event_type == EventType.RENEWAL_REQUEST:
+            # Renewal extends the token's lifetime from the renewal moment.
+            rs["token_expiry"] = rs["current_ts"] + cfg.security.token_lifetime_s
+        if event_type == EventType.TOKEN_PRESENTED:
+            te.record_token_presented(rs["current_ts"])      # Phase 3
+        if event_type == EventType.CHALLENGE_SENT:
+            rs["nonce"] = hashlib.blake2s(uuid.uuid4().bytes).hexdigest()[:16]
+            te.record_nonce_issued(rs["current_ts"])         # Phase 3
+        if event_type in {EventType.AUTHENTICATION_FAILURE, EventType.TOKEN_REJECTED}:
+            rs["retry_count"]        += 1
+            ctx["failed_auth_count"] += 1
+            te.record_failure()                              # Phase 3
+        if event_type == EventType.RETRY:
+            ctx["n_retries_fired"] += 1
+
+        # ── Capture step latencies ────────────────────────────────────────────
+        delay_ms = delay * 1000
+        if event_type == EventType.REGISTRATION_REQUEST:
+            ctx["s1_latency_ms"] = round(delay_ms, 2)
+        elif event_type == EventType.CHALLENGE_SENT and ctx["s2_latency_ms"] == 0.0:
+            # capture only the first challenge (retry scenario has two)
+            ctx["s2_latency_ms"]      = round(delay_ms, 2)
+            ctx["pairing_latency_ms"] = round(delay_ms, 2)
+        elif event_type == EventType.AUTHENTICATION_SUCCESS:
+            ctx["s3_latency_ms"]      = round(delay_ms, 2)
+            ctx["auth_latency_ms"]    = round(delay_ms, 2)
+            ctx["final_auth_result"]  = 1
+            ctx["connack_code"]       = "success"
+            ctx["credential_status"]  = 1
+        elif event_type == EventType.AUTHENTICATION_FAILURE:
+            # Only update s3 if we haven't succeeded yet
+            if ctx["final_auth_result"] == 0:
+                ctx["s3_latency_ms"]   = round(delay_ms, 2)
+                ctx["auth_latency_ms"] = round(delay_ms, 2)
+            ctx["connack_code"] = failure_reason or "auth_failure"
+        elif event_type == EventType.TOKEN_ISSUED and ctx["s4_latency_ms"] == 0.0:
+            ctx["s4_latency_ms"] = round(delay_ms, 2)
+        elif event_type == EventType.SESSION_OPENED:
+            ctx["s5_latency_ms"]        = round(delay_ms, 2)
+            ctx["authorization_result"] = 1
+            ctx["session_present"]      = 1
+        elif event_type == EventType.RENEWAL_REQUEST:
+            ctx["s6_latency_ms"]    = round(delay_ms, 2)
+            ctx["re_auth_required"] = 1
+            te.record_renewal(rs["current_ts"])              # Phase 3: reset token clock
+        elif event_type == EventType.ACCESS_DENIED:
+            ctx["topic_scope_violation"] = 1 if random.random() < 0.3 else 0
+
+        ev_token_id = rs["token_id"] if event_type in TOKEN_CARRYING_EVENTS else None
+        ev = self._make_event(
+            event_type=event_type, prev_state=prev_state,
+            new_state=new_state, result=result,
+            failure_reason=failure_reason, session_id=rs["session_id"],
+            scenario_id=spec.scenario_id, timestamp=rs["current_ts"],
+            delay=delay, retry_count=rs["retry_count"],
+            token_id=ev_token_id,
+            token_expiry=rs["token_expiry"] if ev_token_id else None,
+            token_scope=rs["token_scope"] if ev_token_id else None,
+            nonce=rs["nonce"] if event_type in NONCE_CARRYING_EVENTS else None,
+            topic=rs["topic"] if event_type in TOPIC_CARRYING_EVENTS else None,
+            resource_id=rs["resource_id"] if event_type in RESOURCE_CARRYING_EVENTS else None,
+            anomaly_label=None,
+        )
+        events.append(ev)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SessionContext builder
@@ -587,10 +696,11 @@ class EventEngine:
 
         if is_attack:
             msg_rate   = max(1.0, random.gauss(350.0, 80.0))
-            keep_alive = 10
         else:
             msg_rate   = max(0.1, random.gauss(1.0, 0.3))
-            keep_alive = 60
+        # keep_alive: sampled from a shared, overlapping distribution (no longer
+        # a hard 10-vs-60 split that perfectly separates the classes).
+        keep_alive = _sample_keep_alive(is_attack)
 
         byte_rate = round(msg_rate * payload_size, 2)
 
@@ -661,14 +771,14 @@ class EventEngine:
             source_diversity        = 1 + ctx["source_ip_change"],
             battery_level           = self.battery_level,
             # Network
-            tcp_flags               = "SYN,ACK" if not is_attack else "SYN",
+            tcp_flags               = _sample_tcp_flags(is_attack),
             connection_duration     = conn_duration,
             tcp_rtt                 = round(tcp_rtt, 2),
             packet_rate             = round(pkt_rate, 3),
             inter_arrival_time      = inter_arrival,
             frame_length            = frame_len,
             tcp_segment_len         = seg_len,
-            pairing_result          = 1 if not is_attack else 0,
+            pairing_result          = _sample_pairing_result(is_attack, attack_type),
             pairing_latency_ms      = ctx["pairing_latency_ms"],
             # Auth / MQTT
             credential_status       = ctx["credential_status"],
