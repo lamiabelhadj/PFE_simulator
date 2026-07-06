@@ -20,6 +20,7 @@ Three session properties guaranteed
 """
 
 import hashlib
+import math
 import random
 import time
 import uuid
@@ -199,6 +200,43 @@ def _sample_pairing_result(is_attack: bool, anomaly_type: Optional[str]) -> int:
         return 0 if random.random() < 0.03 else 1
     fail_prob = _PAIRING_FAIL_PROB.get(anomaly_type, 0.08)
     return 0 if random.random() < fail_prob else 1
+
+
+# ── Traffic intensity (packet_rate / message_rate) ────────────────────────────
+# Only genuinely traffic-intensive attacks raise the message / packet rate.
+# Protocol-logic attacks (replay, nonce reuse, timestamp, identity, unauthorized
+# access, abnormal renewal, impersonation) ride inside otherwise normal-looking
+# traffic, so they must share the normal rate band — otherwise "high rate ⇒
+# attack" becomes a trivial shortcut that hides the authentication-lifecycle
+# signal we actually want models to learn.
+RATE_BASED_ATTACKS = {
+    "abnormal_failure_rate",   # brute-force / repeated auth hammering
+    "duplicate_sequence",      # full auth sequence replayed → extra request volume
+}
+
+
+def _sample_traffic_rate(is_rate_based: bool) -> Tuple[float, float]:
+    """
+    Return (packet_rate, message_rate) in msgs|packets per second.
+
+    Baseline sessions (normal + protocol-logic attacks) draw from one shared
+    low-to-moderate lognormal band; traffic-intensive attacks draw from a higher
+    lognormal whose lower tail overlaps the top of the baseline band — so the
+    two are NOT cleanly separable. packet_rate is derived from message_rate with
+    noise (each MQTT message rides on ≥1 packet plus acks) so it overlaps too,
+    instead of being an independent high-vs-low leak.
+    """
+    if is_rate_based:
+        # median ~90 msg/s, heavy tail up to a few hundred (flood-like)
+        msg_rate = random.lognormvariate(math.log(90.0), 0.85)
+    else:
+        # median ~2 msg/s, moderate tail into the low tens (bursty telemetry)
+        msg_rate = random.lognormvariate(math.log(2.0), 1.0)
+    msg_rate = min(max(msg_rate, 0.05), 600.0)
+
+    packet_rate = max(0.1, msg_rate * random.uniform(1.5, 4.0)
+                      + random.gauss(0.0, 1.0))
+    return round(packet_rate, 3), round(msg_rate, 3)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -671,13 +709,17 @@ class EventEngine:
         # Phase 3 fix: use the actual anomaly label, not a generic "attack" string
         attack_type = spec.anomaly_type if is_attack else "normal"
 
+        # Traffic intensity depends on the attack TYPE, not the label: only
+        # genuinely rate-based attacks flood; protocol-logic attacks share the
+        # normal rate band (see _sample_traffic_rate / RATE_BASED_ATTACKS).
+        is_rate_based        = is_attack and attack_type in RATE_BASED_ATTACKS
+        pkt_rate, msg_rate   = _sample_traffic_rate(is_rate_based)
+
         # ── Network features ──────────────────────────────────────────────────
         if is_attack:
             tcp_rtt    = max(1.0, random.gauss(8.0,  30.0))
-            pkt_rate   = max(1.0, random.gauss(350.0, 80.0))
         else:
             tcp_rtt    = max(1.0, random.gauss(20.0, 5.0))
-            pkt_rate   = max(0.1, random.gauss(5.0,  1.5))
 
         inter_arrival = round(1000.0 / pkt_rate, 2)
         frame_len     = random.randint(64, 256)
@@ -694,12 +736,10 @@ class EventEngine:
         payload_sample = bytes(random.randint(0, 255) for _ in range(min(payload_size, 64)))
         payload_hash   = hashlib.blake2s(payload_sample).hexdigest()
 
-        if is_attack:
-            msg_rate   = max(1.0, random.gauss(350.0, 80.0))
-        else:
-            msg_rate   = max(0.1, random.gauss(1.0, 0.3))
         # keep_alive: sampled from a shared, overlapping distribution (no longer
         # a hard 10-vs-60 split that perfectly separates the classes).
+        # message_rate was sampled above (with packet_rate) from the type-aware
+        # traffic profile so it overlaps between normal and non-rate attacks.
         keep_alive = _sample_keep_alive(is_attack)
 
         byte_rate = round(msg_rate * payload_size, 2)
