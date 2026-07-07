@@ -239,6 +239,51 @@ def _sample_traffic_rate(is_rate_based: bool) -> Tuple[float, float]:
     return round(packet_rate, 3), round(msg_rate, 3)
 
 
+def _compute_trust_score(ctx: Dict, renewals: int) -> float:
+    """
+    Continuous zero-trust score in [0, 1].
+
+    Derived from the behavioural / identity / temporal signals ACTUALLY observed
+    in the session (never from the ground-truth label), starting from a high
+    baseline and degrading with each deviation present. Small Gaussian noise is
+    added so the score is continuous instead of collapsing onto a handful of
+    discrete values (the previous formula only reacted to auth failures and
+    renewals, so every attack pinned to exactly 0.8).
+
+    Because it reacts to observed traces, a stealthy anomaly that leaves little
+    trace (e.g. a very fast nonce reuse) legitimately keeps a high, normal-
+    looking score. That is realistic and keeps trust_score from becoming a
+    label shortcut — it carries genuine, graded signal that still overlaps the
+    normal band.
+    """
+    trust = 0.85
+
+    # Repeated auth failures erode trust; successful renewals slightly restore it.
+    trust -= 0.07 * ctx.get("failed_auth_count", 0)
+    trust += 0.02 * renewals
+
+    # Identity / credential deviations (impersonation, foreign token, no-auth access).
+    trust -= 0.28 * ctx.get("identity_claim_mismatch", 0)
+    trust -= 0.24 * ctx.get("token_device_mismatch", 0)
+    trust -= 0.24 * ctx.get("unauthorized_access_attempt", 0)
+    trust -= 0.14 * ctx.get("source_ip_change", 0)
+
+    # Replay / duplication / scope violations.
+    trust -= 0.18 * ctx.get("replay_window_violation", 0)
+    trust -= 0.14 * ctx.get("duplicate_session_count", 0)
+    trust -= 0.08 * ctx.get("topic_scope_violation", 0)
+
+    # Graded temporal signals — magnitude drives within-type spread.
+    trust -= 0.12 * min(ctx.get("timestamp_delta_s", 0.0) / 900.0, 1.0)
+    trust -= 0.10 * min(ctx.get("token_age_at_replay", 0.0) / 600.0, 1.0)
+    trust -= 0.10 * min(ctx.get("nonce_age_at_reuse", 0.0) / 60.0, 1.0)
+
+    # Continuous jitter so the feature is a real distribution, not 3 spikes.
+    trust += random.gauss(0.0, 0.06)
+
+    return round(max(0.0, min(1.0, trust)), 3)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SessionContext — all Phase 0 features not derivable from AuthEvent alone
 # ══════════════════════════════════════════════════════════════════════════════
@@ -770,13 +815,9 @@ class EventEngine:
 
         session_dur = max(0.0, events[-1].timestamp - events[0].timestamp)
 
-        # ── Trust score (degrades with failures, recovers with renewals) ────────
+        # ── Trust score — continuous zero-trust score from observed signals ─────
         renewals = te.renewal_count if te else 0
-        trust = max(0.0, min(1.0,
-            0.8
-            - ctx["failed_auth_count"] * 0.15
-            + renewals * 0.05          # each renewal slightly restores trust
-        ))
+        trust = _compute_trust_score(ctx, renewals)
         replay_viol = ctx.get("replay_window_violation", 0)
         behavior_dev = round(
             (1.0 - trust)
