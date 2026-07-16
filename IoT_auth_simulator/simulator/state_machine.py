@@ -37,11 +37,11 @@ a device after repeated failures.
 
 Anomaly coverage
 ────────────────
-9 anomaly types from the spec are mapped to invalid transitions:
+9 anomaly types from the threat model are mapped to invalid transitions:
   1. replay_token               6. impersonation
   2. nonce_reuse                7. identity_token_mismatch
   3. timestamp_inconsistency    8. abnormal_renewal
-  4. access_without_auth        9. duplicate_sequence (documented, future)
+  4. access_without_auth        9. duplicate_sequence
   5. abnormal_failure_rate
 """
 
@@ -71,19 +71,37 @@ class TransitionError(Exception):
 
 TRANSITIONS: Dict[Tuple[AuthState, EventType], AuthState] = {
 
-    # ── Registration ──────────────────────────────────────────────────────────
-    (AuthState.UNREGISTERED, EventType.REGISTRATION_REQUEST):  AuthState.REGISTERED,
-    (AuthState.REGISTERED,   EventType.REGISTRATION_REQUEST):  AuthState.REGISTERED,   # idempotent re-reg (won't fail or cause error the state machine will stay in registered state because the device is already registered)
-    (AuthState.REGISTERED,   EventType.REGISTRATION_CONFIRMED): AuthState.REGISTERED,  # server-side confirmation, state stays REGISTERED (matches FLOW_STATE_AFTER)
+    # ── Discovery ─────────────────────────────────────────────────────────────
+    (AuthState.UNREGISTERED, EventType.DISCOVERY):              AuthState.DISCOVERED,
+    (AuthState.DISCOVERED,   EventType.GATEWAY_ADVERTISEMENT):  AuthState.DISCOVERED,
+
+    # ── Pairing (ECDH) ────────────────────────────────────────────────────────
+    # Pairing produces a confidential channel only; it is NOT proof of identity.
+    (AuthState.DISCOVERED, EventType.PAIRING_REQUEST):  AuthState.PAIRING,
+    (AuthState.PAIRING,    EventType.PAIRING_RESPONSE): AuthState.PAIRED,
+
+    # ── Enrollment (authenticates the device inside the paired channel) ───────
+    (AuthState.PAIRED,    EventType.ENROLLMENT_REQUEST):   AuthState.ENROLLING,
+    (AuthState.ENROLLING, EventType.ENROLLMENT_CONFIRMED): AuthState.ENROLLED,
+
+    # ── Registration (legacy coarse alias for discovery→enrollment) ───────────
+    (AuthState.UNREGISTERED, EventType.REGISTRATION_REQUEST):   AuthState.ENROLLED,
+    (AuthState.ENROLLED,     EventType.REGISTRATION_REQUEST):   AuthState.ENROLLED,   # idempotent re-reg
+    (AuthState.ENROLLED,     EventType.REGISTRATION_CONFIRMED): AuthState.ENROLLED,   # server-side confirmation
+    (AuthState.REGISTERED,   EventType.REGISTRATION_REQUEST):   AuthState.ENROLLED,   # legacy alias still accepted
+    (AuthState.REGISTERED,   EventType.REGISTRATION_CONFIRMED): AuthState.ENROLLED,
 
     # ── Authentication initiation ─────────────────────────────────────────────
-    (AuthState.REGISTERED,    EventType.AUTHENTICATION_REQUEST): AuthState.AUTH_REQUESTED,
+    (AuthState.ENROLLED,      EventType.AUTHENTICATION_REQUEST): AuthState.AUTH_REQUESTED,
+    (AuthState.REGISTERED,    EventType.AUTHENTICATION_REQUEST): AuthState.AUTH_REQUESTED,  # legacy alias
     (AuthState.TOKEN_EXPIRED, EventType.AUTHENTICATION_REQUEST): AuthState.AUTH_REQUESTED,
     (AuthState.AUTH_FAILED,   EventType.AUTHENTICATION_REQUEST): AuthState.AUTH_REQUESTED,
 
     # ── Challenge–response ────────────────────────────────────────────────────
     # Gateway sends challenge → state becomes CHALLENGE_ISSUED
     (AuthState.AUTH_REQUESTED,  EventType.CHALLENGE_SENT):   AuthState.CHALLENGE_ISSUED,
+    # Renewal re-runs a fresh PoP challenge without tearing down the session.
+    (AuthState.RENEWAL_REQUESTED, EventType.CHALLENGE_SENT): AuthState.CHALLENGE_ISSUED,
     # Server receives device nonce (challenge still open, device hasn't responded yet)
     (AuthState.CHALLENGE_ISSUED, EventType.NONCE_RECEIVED):  AuthState.CHALLENGE_ISSUED,
     # Device sends full response (nonce + computed answer)
@@ -124,10 +142,11 @@ TRANSITIONS: Dict[Tuple[AuthState, EventType], AuthState] = {
     (AuthState.TOKEN_EXPIRED,   EventType.RENEWAL_REQUEST): AuthState.RENEWAL_REQUESTED,
 
     # ── Session close ─────────────────────────────────────────────────────────
-    (AuthState.SESSION_OPEN,    EventType.SESSION_CLOSED): AuthState.REGISTERED,
-    (AuthState.ACCESS_GRANTED,  EventType.SESSION_CLOSED): AuthState.REGISTERED,
-    (AuthState.ACCESS_DENIED,   EventType.SESSION_CLOSED): AuthState.REGISTERED,
-    (AuthState.TOKEN_VALIDATED, EventType.SESSION_CLOSED): AuthState.REGISTERED,
+    # Device stays enrolled after a session closes and can re-authenticate later.
+    (AuthState.SESSION_OPEN,    EventType.SESSION_CLOSED): AuthState.ENROLLED,
+    (AuthState.ACCESS_GRANTED,  EventType.SESSION_CLOSED): AuthState.ENROLLED,
+    (AuthState.ACCESS_DENIED,   EventType.SESSION_CLOSED): AuthState.ENROLLED,
+    (AuthState.TOKEN_VALIDATED, EventType.SESSION_CLOSED): AuthState.ENROLLED,
 
     # ── Retry ─────────────────────────────────────────────────────────────────
     (AuthState.AUTH_FAILED,   EventType.RETRY): AuthState.AUTH_REQUESTED,
@@ -135,17 +154,17 @@ TRANSITIONS: Dict[Tuple[AuthState, EventType], AuthState] = {
     (AuthState.ACCESS_DENIED, EventType.RETRY): AuthState.ACCESS_REQUESTED,
 
     # ── Timeout ───────────────────────────────────────────────────────────────
-    (AuthState.AUTH_REQUESTED,   EventType.TIMEOUT): AuthState.REGISTERED,
-    (AuthState.CHALLENGE_ISSUED, EventType.TIMEOUT): AuthState.REGISTERED,
-    (AuthState.RESPONSE_SENT,    EventType.TIMEOUT): AuthState.REGISTERED,
+    (AuthState.AUTH_REQUESTED,   EventType.TIMEOUT): AuthState.ENROLLED,
+    (AuthState.CHALLENGE_ISSUED, EventType.TIMEOUT): AuthState.ENROLLED,
+    (AuthState.RESPONSE_SENT,    EventType.TIMEOUT): AuthState.ENROLLED,
     (AuthState.TOKEN_PRESENTED,  EventType.TIMEOUT): AuthState.AUTH_FAILED,
-    (AuthState.SESSION_OPEN,     EventType.TIMEOUT): AuthState.REGISTERED,
+    (AuthState.SESSION_OPEN,     EventType.TIMEOUT): AuthState.ENROLLED,
 
     # ── Disconnect ────────────────────────────────────────────────────────────
-    (AuthState.SESSION_OPEN,    EventType.DISCONNECT): AuthState.REGISTERED,
-    (AuthState.ACCESS_GRANTED,  EventType.DISCONNECT): AuthState.REGISTERED,
-    (AuthState.AUTHENTICATED,   EventType.DISCONNECT): AuthState.REGISTERED,
-    (AuthState.TOKEN_VALIDATED, EventType.DISCONNECT): AuthState.REGISTERED,
+    (AuthState.SESSION_OPEN,    EventType.DISCONNECT): AuthState.ENROLLED,
+    (AuthState.ACCESS_GRANTED,  EventType.DISCONNECT): AuthState.ENROLLED,
+    (AuthState.AUTHENTICATED,   EventType.DISCONNECT): AuthState.ENROLLED,
+    (AuthState.TOKEN_VALIDATED, EventType.DISCONNECT): AuthState.ENROLLED,
 }
 
 # Total number of valid transitions
@@ -168,7 +187,7 @@ ANOMALY_TRANSITIONS: Dict[str, List[Tuple[AuthState, EventType]]] = {
     # 1. Token replay
     #    A token is presented outside the normal issuance → presentation window.
     "replay_token": [
-        (AuthState.REGISTERED,   EventType.TOKEN_PRESENTED),   # no auth at all
+        (AuthState.ENROLLED,     EventType.TOKEN_PRESENTED),   # no auth at all
         (AuthState.SESSION_OPEN, EventType.TOKEN_PRESENTED),   # re-present in live session
         (AuthState.AUTH_FAILED,  EventType.TOKEN_PRESENTED),   # present after failure
     ],
@@ -176,7 +195,7 @@ ANOMALY_TRANSITIONS: Dict[str, List[Tuple[AuthState, EventType]]] = {
     # 2. Nonce reuse
     #    A NONCE_RECEIVED event when no challenge is active.
     "nonce_reuse": [
-        (AuthState.REGISTERED,      EventType.NONCE_RECEIVED),
+        (AuthState.ENROLLED,        EventType.NONCE_RECEIVED),
         (AuthState.AUTHENTICATED,   EventType.NONCE_RECEIVED),
         (AuthState.SESSION_OPEN,    EventType.NONCE_RECEIVED),
         (AuthState.TOKEN_VALIDATED, EventType.NONCE_RECEIVED),
@@ -186,25 +205,26 @@ ANOMALY_TRANSITIONS: Dict[str, List[Tuple[AuthState, EventType]]] = {
     #    State-level representation: a response arrives before a challenge
     #    was ever issued.  Temporal enforcement (negative delay) is added
     "timestamp_inconsistency": [
-        (AuthState.REGISTERED,    EventType.RESPONSE_SENT),
+        (AuthState.ENROLLED,       EventType.RESPONSE_SENT),
         (AuthState.AUTH_REQUESTED, EventType.RESPONSE_SENT),  # challenge not issued yet
     ],
 
     # 4. Access without prior authentication
-    #    ACCESS_REQUEST arrives before any authentication has completed.
+    #    ACCESS_REQUEST arrives while the device is still in pairing/enrollment
+    #    (i.e. before any authentication has completed).
     "access_without_auth": [
-        (AuthState.UNREGISTERED,     EventType.ACCESS_REQUEST),
-        (AuthState.REGISTERED,       EventType.ACCESS_REQUEST),
-        (AuthState.AUTH_REQUESTED,   EventType.ACCESS_REQUEST),
-        (AuthState.CHALLENGE_ISSUED, EventType.ACCESS_REQUEST),
-        (AuthState.RESPONSE_SENT,    EventType.ACCESS_REQUEST),
+        (AuthState.UNREGISTERED,   EventType.ACCESS_REQUEST),
+        (AuthState.PAIRED,         EventType.ACCESS_REQUEST),
+        (AuthState.ENROLLED,       EventType.ACCESS_REQUEST),
+        (AuthState.AUTH_REQUESTED, EventType.ACCESS_REQUEST),
+        (AuthState.RESPONSE_SENT,  EventType.ACCESS_REQUEST),
     ],
 
     # 5. Abnormal failure rate
     #    Auth attempted from BLOCKED state — device should have been locked out.
     "abnormal_failure_rate": [
         (AuthState.BLOCKED, EventType.AUTHENTICATION_REQUEST),
-        (AuthState.BLOCKED, EventType.REGISTRATION_REQUEST),
+        (AuthState.BLOCKED, EventType.DISCOVERY),
     ],
 
     # 6. Device impersonation
@@ -218,7 +238,7 @@ ANOMALY_TRANSITIONS: Dict[str, List[Tuple[AuthState, EventType]]] = {
     # 7. Identity–token–session mismatch
     #    Session opened without a token ever being presented.
     "identity_token_mismatch": [
-        (AuthState.REGISTERED,    EventType.SESSION_OPENED),
+        (AuthState.ENROLLED,      EventType.SESSION_OPENED),
         (AuthState.AUTHENTICATED, EventType.SESSION_OPENED),   # token not yet presented
     ],
 
@@ -230,11 +250,12 @@ ANOMALY_TRANSITIONS: Dict[str, List[Tuple[AuthState, EventType]]] = {
         (AuthState.TOKEN_PRESENTED, EventType.RENEWAL_REQUEST),
     ],
 
-    # 9. Full sequence duplication (documented for future implementation)
-    #    A complete auth sequence replayed while a session is already open.
+    # 9. Full sequence duplication
+    #    A complete auth sequence is replayed (re-onboarding) while a session
+    #    is already open.
     "duplicate_sequence": [
-        (AuthState.SESSION_OPEN,  EventType.REGISTRATION_REQUEST),
-        (AuthState.AUTHENTICATED, EventType.REGISTRATION_REQUEST),
+        (AuthState.SESSION_OPEN,  EventType.DISCOVERY),
+        (AuthState.AUTHENTICATED, EventType.DISCOVERY),
     ],
 }
 

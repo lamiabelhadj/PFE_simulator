@@ -19,8 +19,8 @@ Three properties every event sequence must satisfy:
 
 Public API
 ──────────
-  EventType    — 21 event types covering the full authentication lifecycle
-  AuthState    — 18 device/session states
+  EventType    — 27 event types covering the full authentication lifecycle
+  AuthState    — 23 device/session states
   EventResult  — success | failure | pending
   AuthEvent    — dataclass for one event in a correlated sequence
 """
@@ -33,7 +33,7 @@ from typing import Optional
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# EventType — 21 event types
+# EventType — 27 event types
 # ══════════════════════════════════════════════════════════════════════════════
 
 class EventType(str, Enum):
@@ -43,9 +43,15 @@ class EventType(str, Enum):
     Inherits from str so values serialise to JSON without extra conversion
     and can be compared directly to string literals in tests.
 
-    Phase mapping
+    Six-phase lifecycle mapping (discovery → pairing → enrollment → authorization
+    → MQTT session → re-authentication), matching the functional model:
     ─────────────
+    Discovery    : DISCOVERY, GATEWAY_ADVERTISEMENT
+    Pairing      : PAIRING_REQUEST, PAIRING_RESPONSE          (ECDH channel)
+    Enrollment   : ENROLLMENT_REQUEST, ENROLLMENT_CONFIRMED   (identity recorded)
     Registration : REGISTRATION_REQUEST, REGISTRATION_CONFIRMED
+                   (legacy coarse alias for the discovery→enrollment span; kept
+                    for backward compatibility with earlier scenarios / datasets)
     Auth         : AUTHENTICATION_REQUEST, CHALLENGE_SENT, NONCE_RECEIVED,
                    RESPONSE_SENT, AUTHENTICATION_SUCCESS, AUTHENTICATION_FAILURE
     Token        : TOKEN_ISSUED, TOKEN_PRESENTED, TOKEN_VALIDATED,
@@ -55,7 +61,19 @@ class EventType(str, Enum):
     Control      : RETRY, TIMEOUT, DISCONNECT
     """
 
-    # Registration
+    # Discovery
+    DISCOVERY             = "discovery"                # device probes for a gateway (mDNS)
+    GATEWAY_ADVERTISEMENT = "gateway_advertisement"    # gateway advertises its services
+
+    # Pairing (ECDH — produces a confidential channel, NOT proof of identity)
+    PAIRING_REQUEST  = "pairing_request"               # device sends ECDH public key
+    PAIRING_RESPONSE = "pairing_response"              # gateway completes ECDH exchange
+
+    # Enrollment (authenticates the device inside the paired channel)
+    ENROLLMENT_REQUEST   = "enrollment_request"        # device presents identity material
+    ENROLLMENT_CONFIRMED = "enrollment_confirmed"      # AS verifies & stores → ENROLLED
+
+    # Registration (legacy coarse alias, kept for backward compatibility)
     REGISTRATION_REQUEST   = "registration_request"
     REGISTRATION_CONFIRMED = "registration_confirmed"
 
@@ -89,7 +107,7 @@ class EventType(str, Enum):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AuthState — 18 states
+# AuthState — 23 states
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AuthState(str, Enum):
@@ -102,13 +120,25 @@ class AuthState(str, Enum):
       - Inject anomalies by forcing a forbidden transition
         (StateMachine.force + get_anomaly_transition).
 
+    Lifecycle ordering
+    ──────────────────
+    UNREGISTERED → DISCOVERED → PAIRING → PAIRED → ENROLLING → ENROLLED
+    → AUTH_REQUESTED → … → SESSION_OPEN.  ENROLLED is the resting state a device
+    returns to after a session closes (it stays enrolled and re-authenticates).
+    REGISTERED is kept as a backward-compatible alias of ENROLLED.
+
     Coexistence note
     ────────────────
     simulator/core/device.py still uses DeviceState (a coarser lifecycle enum
-    from Phase 0).  
+    from Phase 0).
     """
     UNREGISTERED      = "unregistered"
-    REGISTERED        = "registered"
+    DISCOVERED        = "discovered"        # gateway located (post-discovery)
+    PAIRING           = "pairing"           # ECDH handshake in progress
+    PAIRED            = "paired"            # confidential channel established
+    ENROLLING         = "enrolling"         # identity being verified by the AS
+    ENROLLED          = "enrolled"          # identity recorded — resting state
+    REGISTERED        = "registered"        # legacy alias of ENROLLED
     AUTH_REQUESTED    = "auth_requested"
     CHALLENGE_ISSUED  = "challenge_issued"
     RESPONSE_SENT     = "response_sent"

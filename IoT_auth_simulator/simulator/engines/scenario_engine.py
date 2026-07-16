@@ -33,11 +33,15 @@ Injection mechanism (used by EventEngine)
   4. EventEngine catches the error and emits an AuthEvent with anomaly_label set.
   5. Remaining normal_steps[injection_position:] are skipped (session ends on anomaly).
 
-Normal flow (13 steps)
-───────────────────────
-  REGISTRATION_REQUEST → REGISTRATION_CONFIRMED → AUTHENTICATION_REQUEST
-  → CHALLENGE_SENT → NONCE_RECEIVED → RESPONSE_SENT → AUTHENTICATION_SUCCESS
-  → TOKEN_ISSUED → TOKEN_PRESENTED → TOKEN_VALIDATED → SESSION_OPENED
+Normal flow (six-phase lifecycle)
+─────────────────────────────────
+  DISCOVERY → GATEWAY_ADVERTISEMENT                         (discovery)
+  → PAIRING_REQUEST → PAIRING_RESPONSE                      (pairing / ECDH)
+  → ENROLLMENT_REQUEST → ENROLLMENT_CONFIRMED               (enrollment)
+  → AUTHENTICATION_REQUEST → CHALLENGE_SENT → NONCE_RECEIVED
+  → RESPONSE_SENT → AUTHENTICATION_SUCCESS                  (authentication)
+  → TOKEN_ISSUED → TOKEN_PRESENTED → TOKEN_VALIDATED
+  → SESSION_OPENED                                          (MQTT session)
   → ACCESS_REQUEST → ACCESS_GRANTED → SESSION_CLOSED
 """
 
@@ -54,9 +58,19 @@ from simulator.state_machine import ANOMALY_TRANSITIONS, all_anomaly_types
 # Canonical normal flow
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Discovery → pairing → enrollment prefix (the "registration" phase, expanded
+# into its six-phase-lifecycle constituents).
+REGISTRATION_PHASE: List[EventType] = [
+    EventType.DISCOVERY,
+    EventType.GATEWAY_ADVERTISEMENT,
+    EventType.PAIRING_REQUEST,
+    EventType.PAIRING_RESPONSE,
+    EventType.ENROLLMENT_REQUEST,
+    EventType.ENROLLMENT_CONFIRMED,
+]
+
 NORMAL_FLOW: List[EventType] = [
-    EventType.REGISTRATION_REQUEST,
-    EventType.REGISTRATION_CONFIRMED,
+    *REGISTRATION_PHASE,                # discovery + pairing + enrollment
     EventType.AUTHENTICATION_REQUEST,
     EventType.CHALLENGE_SENT,
     EventType.NONCE_RECEIVED,
@@ -74,8 +88,7 @@ NORMAL_FLOW: List[EventType] = [
 # Normal flow variant: one auth failure followed by a successful retry.
 # AUTH_FAILED → RETRY (backoff) → re-enter challenge-response → success.
 NORMAL_FLOW_WITH_RETRY: List[EventType] = [
-    EventType.REGISTRATION_REQUEST,
-    EventType.REGISTRATION_CONFIRMED,
+    *REGISTRATION_PHASE,
     EventType.AUTHENTICATION_REQUEST,
     EventType.CHALLENGE_SENT,
     EventType.NONCE_RECEIVED,
@@ -96,10 +109,11 @@ NORMAL_FLOW_WITH_RETRY: List[EventType] = [
 ]
 
 # Normal flow variant: token renewal mid-session.
-# After first access, token nears expiry → RENEWAL_REQUEST → new TOKEN_ISSUED.
+# After first access, the token nears expiry → the device re-authenticates with
+# a FRESH PoP challenge (challenge → nonce → response) without tearing down the
+# MQTT session, then receives a renewed token.
 NORMAL_FLOW_WITH_RENEWAL: List[EventType] = [
-    EventType.REGISTRATION_REQUEST,
-    EventType.REGISTRATION_CONFIRMED,
+    *REGISTRATION_PHASE,
     EventType.AUTHENTICATION_REQUEST,
     EventType.CHALLENGE_SENT,
     EventType.NONCE_RECEIVED,
@@ -112,6 +126,10 @@ NORMAL_FLOW_WITH_RENEWAL: List[EventType] = [
     EventType.ACCESS_REQUEST,
     EventType.ACCESS_GRANTED,
     EventType.RENEWAL_REQUEST,          # token nearing expiry, device renews
+    EventType.CHALLENGE_SENT,           # fresh PoP challenge (session kept open)
+    EventType.NONCE_RECEIVED,
+    EventType.RESPONSE_SENT,
+    EventType.AUTHENTICATION_SUCCESS,
     EventType.TOKEN_ISSUED,             # fresh token issued by auth server
     EventType.TOKEN_PRESENTED,
     EventType.TOKEN_VALIDATED,
@@ -122,7 +140,7 @@ NORMAL_FLOW_WITH_RENEWAL: List[EventType] = [
 # Every full session starts with this; the in-session access activity and the
 # ending are what vary. Anomaly injection positions are all within this prefix,
 # so a session can carry arbitrary trailing activity without affecting them.
-AUTH_PREFIX: List[EventType] = list(NORMAL_FLOW[:11])   # 11 events → SESSION_OPEN
+AUTH_PREFIX: List[EventType] = list(NORMAL_FLOW[:15])   # 15 events → SESSION_OPEN
 
 # One benign access cycle (request → granted).
 CLEAN_ACCESS_CYCLE: List[EventType] = [
@@ -182,8 +200,14 @@ def build_partial_flow() -> List[EventType]:
 # Maps EventType → the AuthState the SM will be in AFTER that event fires.
 # Used by the scenario engine to pick a sensible injection_position.
 FLOW_STATE_AFTER: Dict[EventType, AuthState] = {
-    EventType.REGISTRATION_REQUEST:   AuthState.REGISTERED,
-    EventType.REGISTRATION_CONFIRMED: AuthState.REGISTERED,
+    EventType.DISCOVERY:              AuthState.DISCOVERED,
+    EventType.GATEWAY_ADVERTISEMENT:  AuthState.DISCOVERED,
+    EventType.PAIRING_REQUEST:        AuthState.PAIRING,
+    EventType.PAIRING_RESPONSE:       AuthState.PAIRED,
+    EventType.ENROLLMENT_REQUEST:     AuthState.ENROLLING,
+    EventType.ENROLLMENT_CONFIRMED:   AuthState.ENROLLED,
+    EventType.REGISTRATION_REQUEST:   AuthState.ENROLLED,
+    EventType.REGISTRATION_CONFIRMED: AuthState.ENROLLED,
     EventType.AUTHENTICATION_REQUEST: AuthState.AUTH_REQUESTED,
     EventType.CHALLENGE_SENT:         AuthState.CHALLENGE_ISSUED,
     EventType.NONCE_RECEIVED:         AuthState.CHALLENGE_ISSUED,
@@ -195,23 +219,25 @@ FLOW_STATE_AFTER: Dict[EventType, AuthState] = {
     EventType.SESSION_OPENED:         AuthState.SESSION_OPEN,
     EventType.ACCESS_REQUEST:         AuthState.ACCESS_REQUESTED,
     EventType.ACCESS_GRANTED:         AuthState.ACCESS_GRANTED,
-    EventType.SESSION_CLOSED:         AuthState.REGISTERED,
+    EventType.SESSION_CLOSED:         AuthState.ENROLLED,
 }
 
 # ── How many normal steps to run before injecting each anomaly ────────────────
 # The injection_position selects the point in NORMAL_FLOW where the anomaly
 # is inserted.  The value is the number of steps executed BEFORE injection.
 # Chosen so the StateMachine reaches a state close to injection_from_state.
+# Positions are indices into NORMAL_FLOW, whose registration phase now spans the
+# first 6 events (discovery → enrollment_confirmed, ending in ENROLLED).
 ANOMALY_INJECTION_POSITION: Dict[str, int] = {
-    "replay_token":             2,   # after REGISTRATION_CONFIRMED (state: REGISTERED)
-    "nonce_reuse":              7,   # after AUTHENTICATION_SUCCESS  (state: AUTHENTICATED)
-    "timestamp_inconsistency":  2,   # after REGISTRATION_CONFIRMED (state: REGISTERED)
-    "access_without_auth":      2,   # after REGISTRATION_CONFIRMED (state: REGISTERED)
-    "abnormal_failure_rate":    6,   # after RESPONSE_SENT          (state: RESPONSE_SENT)
-    "impersonation":            6,   # after RESPONSE_SENT          (state: RESPONSE_SENT)
-    "identity_token_mismatch":  2,   # after REGISTRATION_CONFIRMED (state: REGISTERED)
-    "abnormal_renewal":         8,   # after TOKEN_PRESENTED        (state: TOKEN_PRESENTED)
-    "duplicate_sequence":      10,   # after SESSION_OPENED         (state: SESSION_OPEN)
+    "replay_token":             6,   # after ENROLLMENT_CONFIRMED  (state: ENROLLED)
+    "nonce_reuse":             11,   # after AUTHENTICATION_SUCCESS (state: AUTHENTICATED)
+    "timestamp_inconsistency":  6,   # after ENROLLMENT_CONFIRMED  (state: ENROLLED)
+    "access_without_auth":      6,   # after ENROLLMENT_CONFIRMED  (state: ENROLLED)
+    "abnormal_failure_rate":   10,   # after RESPONSE_SENT         (state: RESPONSE_SENT)
+    "impersonation":           10,   # after RESPONSE_SENT         (state: RESPONSE_SENT)
+    "identity_token_mismatch":  6,   # after ENROLLMENT_CONFIRMED  (state: ENROLLED)
+    "abnormal_renewal":        12,   # after TOKEN_PRESENTED       (state: TOKEN_PRESENTED)
+    "duplicate_sequence":      14,   # after SESSION_OPENED        (state: SESSION_OPEN)
 }
 
 

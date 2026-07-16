@@ -50,6 +50,12 @@ SEVERITY_MAP: Dict[str, str] = {
 
 # ── Delay profiles (mean, std) in seconds ─────────────────────────────────────
 DELAY_PROFILE_NORMAL: Dict[EventType, Tuple[float, float]] = {
+    EventType.DISCOVERY:              (0.0,  0.0),
+    EventType.GATEWAY_ADVERTISEMENT:  (0.12, 0.04),
+    EventType.PAIRING_REQUEST:        (0.10, 0.03),
+    EventType.PAIRING_RESPONSE:       (0.18, 0.06),   # ECDH exchange cost
+    EventType.ENROLLMENT_REQUEST:     (0.15, 0.05),
+    EventType.ENROLLMENT_CONFIRMED:   (0.20, 0.07),
     EventType.REGISTRATION_REQUEST:   (0.0,  0.0),
     EventType.REGISTRATION_CONFIRMED: (0.08, 0.02),
     EventType.AUTHENTICATION_REQUEST: (0.5,  0.3),
@@ -74,6 +80,12 @@ DELAY_PROFILE_NORMAL: Dict[EventType, Tuple[float, float]] = {
 }
 
 DELAY_PROFILE_ATTACK: Dict[EventType, Tuple[float, float]] = {
+    EventType.DISCOVERY:              (0.0,  0.0),
+    EventType.GATEWAY_ADVERTISEMENT:  (0.05, 0.02),
+    EventType.PAIRING_REQUEST:        (0.04, 0.01),
+    EventType.PAIRING_RESPONSE:       (0.06, 0.02),
+    EventType.ENROLLMENT_REQUEST:     (0.05, 0.02),
+    EventType.ENROLLMENT_CONFIRMED:   (0.06, 0.02),
     EventType.REGISTRATION_REQUEST:   (0.0,  0.0),
     EventType.REGISTRATION_CONFIRMED: (0.04, 0.01),
     EventType.AUTHENTICATION_REQUEST: (0.05, 0.02),
@@ -132,6 +144,12 @@ TOKEN_SCOPES = [
 # REGISTERED→REGISTERED re-registration / confirmation) is always legitimate,
 # so it should never produce a "transient_error" failure on a valid transition.
 RELIABLE_EVENTS = {
+    EventType.DISCOVERY,
+    EventType.GATEWAY_ADVERTISEMENT,
+    EventType.PAIRING_REQUEST,
+    EventType.PAIRING_RESPONSE,
+    EventType.ENROLLMENT_REQUEST,
+    EventType.ENROLLMENT_CONFIRMED,
     EventType.REGISTRATION_REQUEST,
     EventType.REGISTRATION_CONFIRMED,
 }
@@ -689,14 +707,20 @@ class EventEngine:
         if event_type == EventType.RETRY:
             ctx["n_retries_fired"] += 1
 
-        # ── Capture step latencies ────────────────────────────────────────────
+        # ── Capture step latencies (mapped to the six lifecycle phases) ───────
         delay_ms = delay * 1000
-        if event_type == EventType.REGISTRATION_REQUEST:
+        if event_type in (EventType.DISCOVERY, EventType.REGISTRATION_REQUEST):
+            # s1 = discovery / registration
             ctx["s1_latency_ms"] = round(delay_ms, 2)
-        elif event_type == EventType.CHALLENGE_SENT and ctx["s2_latency_ms"] == 0.0:
-            # capture only the first challenge (retry scenario has two)
-            ctx["s2_latency_ms"]      = round(delay_ms, 2)
+        elif event_type == EventType.PAIRING_RESPONSE:
+            # pairing latency = the ECDH exchange step
             ctx["pairing_latency_ms"] = round(delay_ms, 2)
+        elif event_type == EventType.CHALLENGE_SENT and ctx["s2_latency_ms"] == 0.0:
+            # s2 = pairing / challenge — capture only the first challenge
+            # (retry and renewal scenarios issue more than one)
+            ctx["s2_latency_ms"] = round(delay_ms, 2)
+            if ctx["pairing_latency_ms"] == 0.0:
+                ctx["pairing_latency_ms"] = round(delay_ms, 2)
         elif event_type == EventType.AUTHENTICATION_SUCCESS:
             ctx["s3_latency_ms"]      = round(delay_ms, 2)
             ctx["auth_latency_ms"]    = round(delay_ms, 2)
