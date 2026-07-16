@@ -58,6 +58,7 @@ class AuthServer:
       - Step 3 : PSK-based enrollment (verify & register device identity)
       - Step 4 : OAuth2/ACE token issuance
       - Step 6 : Token revalidation for continuous Zero-Trust verification
+      - Revocation : revoke tokens on demand (decommission / anomaly response)
     """
 
     server_id:  str
@@ -69,10 +70,14 @@ class AuthServer:
     # ── Issued tokens: token_id → AccessToken ────────────────────────────────
     _tokens: Dict[str, AccessToken] = field(default_factory=dict)
 
+    # ── Revocation list: token_id → reason ───────────────────────────────────
+    _revoked: Dict[str, str] = field(default_factory=dict)
+
     # ── Metrics ───────────────────────────────────────────────────────────────
     total_enrollments:    int = 0
     total_tokens_issued:  int = 0
     total_token_failures: int = 0
+    total_revocations:    int = 0
 
     # ══════════════════════════════════════════════════════════════════════════
     # Step 3 — Enrollment
@@ -165,6 +170,34 @@ class AuthServer:
         return token, "token_issued"
 
     # ══════════════════════════════════════════════════════════════════════════
+    # Token revocation (decommission / anomaly response)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def revoke_token(self, token_id: str, reason: str = "revoked") -> bool:
+        """
+        Revoke an issued token on demand.
+
+        Called either because a device has been decommissioned or because the
+        gateway flagged its behaviour as anomalous. A revoked token fails every
+        subsequent revalidation regardless of its expiry.
+
+        Returns True if the token existed and was revoked, False otherwise.
+        """
+        if token_id not in self._tokens:
+            return False
+        self._revoked[token_id] = reason
+        self.total_revocations += 1
+        return True
+
+    def is_revoked(self, token_id: str) -> bool:
+        return token_id in self._revoked
+
+    @property
+    def revocation_list(self) -> Dict[str, str]:
+        """Current revocation list (token_id → reason)."""
+        return dict(self._revoked)
+
+    # ══════════════════════════════════════════════════════════════════════════
     # Step 6 — Token revalidation
     # ══════════════════════════════════════════════════════════════════════════
 
@@ -184,6 +217,9 @@ class AuthServer:
             token_id, device_id, _ = token_string.split(":")
         except ValueError:
             return False, "malformed_token"
+
+        if token_id in self._revoked:
+            return False, "token_revoked"
 
         token = self._tokens.get(token_id)
         if not token:
@@ -219,6 +255,9 @@ class MQTTBroker:
 
     Responsibilities:
       - Step 5 : validate token, open session, gate Pub/Sub operations
+      - Deliver messages at the requested QoS, holding QoS 1/2 messages in
+        pending delivery queues until acknowledged
+      - Track keep-alive to detect and close stale sessions
       - Tracks per-session metrics consumed by feature_builder
     """
 
@@ -262,16 +301,20 @@ class MQTTBroker:
             self.total_connects += 1
             return False, reason, {}
 
+        now = time.time()
         session_present = device_id in self._sessions
 
         session_meta = {
             "session_present":  session_present,
             "clean_session":    clean_session,
             "keep_alive_s":     keep_alive_s,
-            "connected_at":     time.time(),
+            "connected_at":     now,
+            "last_seen":        now,
             "publish_count":    0,
             "subscribe_count":  0,
             "byte_count":       0,
+            "pending_qos1":     [],   # QoS 1 messages awaiting PUBACK
+            "pending_qos2":     [],   # QoS 2 messages awaiting PUBCOMP
         }
         self._sessions[device_id] = session_meta
         self.total_connects += 1
@@ -289,7 +332,12 @@ class MQTTBroker:
         qos:       int  = 1,
         retain:    bool = False,
     ) -> Tuple[bool, str]:
-        """Simulate a PUBLISH operation, enforcing topic scope."""
+        """
+        Simulate a PUBLISH operation, enforcing topic scope.
+
+        QoS 1 and QoS 2 messages are appended to the session's pending delivery
+        queue until acknowledged (see `acknowledge`); QoS 0 is fire-and-forget.
+        """
         if device_id not in self._sessions:
             return False, "not_connected"
 
@@ -298,12 +346,30 @@ class MQTTBroker:
         session = self._sessions[device_id]
         session["publish_count"] += 1
         session["byte_count"]    += len(payload)
+        session["last_seen"]      = time.time()
         self.total_publishes     += 1
 
         if topic_violation:
             return False, "topic_scope_violation"
 
+        # Queue at-least-once / exactly-once messages until acknowledged.
+        if qos == 1:
+            session["pending_qos1"].append((topic, len(payload)))
+        elif qos == 2:
+            session["pending_qos2"].append((topic, len(payload)))
+
         return True, "published"
+
+    def acknowledge(self, device_id: str, qos: int) -> bool:
+        """Pop one pending QoS 1/2 message off the delivery queue (PUBACK/PUBCOMP)."""
+        session = self._sessions.get(device_id)
+        if not session:
+            return False
+        queue = session["pending_qos1"] if qos == 1 else session.get("pending_qos2", [])
+        if queue:
+            queue.pop(0)
+            return True
+        return False
 
     def subscribe(
         self,
@@ -321,10 +387,35 @@ class MQTTBroker:
 
         session = self._sessions[device_id]
         session["subscribe_count"] += 1
+        session["last_seen"]        = time.time()
         self.total_subscribes      += 1
 
         granted_qos = min(qos, max(cfg.mqtt.qos_levels))
         return True, granted_qos, "granted"
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Keep-alive / stale-session detection
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def stale_sessions(self, now: Optional[float] = None) -> Dict[str, dict]:
+        """
+        Return sessions that have exceeded 1.5x their keep-alive window without
+        activity (MQTT treats these as stale and closes them).
+        """
+        now = now if now is not None else time.time()
+        stale = {}
+        for device_id, session in self._sessions.items():
+            grace = session.get("keep_alive_s", cfg.device.keep_alive_normal_s) * 1.5
+            if now - session.get("last_seen", now) > grace:
+                stale[device_id] = session
+        return stale
+
+    def close_stale_sessions(self, now: Optional[float] = None) -> int:
+        """Close every stale session and return how many were closed."""
+        stale = self.stale_sessions(now)
+        for device_id in stale:
+            self.disconnect(device_id)
+        return len(stale)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Disconnect

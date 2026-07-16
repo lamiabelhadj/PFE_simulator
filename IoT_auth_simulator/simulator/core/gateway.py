@@ -60,12 +60,25 @@ class DeviceSession:
 @dataclass
 class Gateway:
     """
+    Edge gateway — the single trusted enforcement point.
 
     All security decisions for devices in this simulation pass through here.
+    Its responsibilities mirror the functional model:
+      (i)   terminate the device-facing TLS channel and re-establish one to cloud
+      (ii)  validate tokens against the authorization server
+      (iii) enforce ABAC policy on publish/subscribe requests
+      (iv)  rate-limit devices that fail authentication repeatedly
+      (v)   detect protocol-level anomalies (duplicate nonces, replayed tokens)
+            within its bounded memory window
     """
 
     gateway_id: str
     ip_address: str = field(default_factory=lambda: cfg.network.gateway_ip)
+
+    # ── TLS: the gateway terminates the device-facing TLS channel and
+    #    re-establishes a separate one toward the cloud. ────────────────────────
+    tls_enabled: bool = True
+    tls_version: str  = "TLSv1.3"
 
     # ── ECDH keypair (one per gateway, rotated conceptually per session) ───────
     _ecdh_private_key: object = field(default=None, repr=False)
@@ -76,6 +89,13 @@ class Gateway:
 
     # ── Replay-attack window: stores recently seen token hashes + timestamp ───
     _replay_window: Dict[str, float] = field(default_factory=dict)
+
+    # ── Nonce cache for PoP-challenge replay detection (nonce → first-seen ts) ─
+    _nonce_cache: Dict[str, float] = field(default_factory=dict)
+
+    # ── ABAC policy table: device_id → list of allowed (topic_pattern, op) ─────
+    #    Attribute-based access control on publish/subscribe requests.
+    _policy_table: Dict[str, List[Tuple[str, str]]] = field(default_factory=dict)
 
     # ── Rate-limiting: request timestamps per source IP ───────────────────────
     _request_log: Dict[str, List[float]] = field(default_factory=lambda: defaultdict(list))
@@ -98,6 +118,26 @@ class Gateway:
     @property
     def public_key(self) -> EllipticCurvePublicKey:
         return self._ecdh_public_key
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TLS termination
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def terminate_tls(self, device_id: str, source_ip: str) -> dict:
+        """
+        Terminate the device-facing TLS channel and re-establish a separate one
+        toward the cloud. The gateway is the only component that spans both the
+        constrained side and the cloud side, so it is where TLS is bridged.
+
+        Returns a small channel descriptor (no real handshake is performed).
+        """
+        return {
+            "tls_enabled":    self.tls_enabled,
+            "device_channel": self.tls_version if self.tls_enabled else None,
+            "cloud_channel":  self.tls_version if self.tls_enabled else None,
+            "device_id":      device_id,
+            "source_ip":      source_ip,
+        }
 
     # ══════════════════════════════════════════════════════════════════════════
     # Step 1 — Discovery
@@ -220,6 +260,68 @@ class Gateway:
             return True, "ip_change_detected"
 
         return False, "session_valid"
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ABAC — attribute-based access control on publish/subscribe
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def set_policy(self, device_id: str, topic_pattern: str, operation: str = "pub_sub") -> None:
+        """
+        Grant a device access to a topic pattern for a given operation.
+        A trailing '#' in the pattern matches any sub-topic (MQTT-style).
+        """
+        self._policy_table.setdefault(device_id, []).append((topic_pattern, operation))
+
+    def authorize_topic(self, device_id: str, topic: str, operation: str = "publish") -> Tuple[bool, str]:
+        """
+        Enforce ABAC on a publish/subscribe request.
+
+        The decision uses the device_id, the requested topic, and the operation
+        (attributes) against the gateway's policy table. Returns
+        (allowed, reason). A device with no policy is denied by default
+        (Zero-Trust: no implicit access).
+        """
+        rules = self._policy_table.get(device_id)
+        if not rules:
+            return False, "no_policy"
+
+        for pattern, allowed_op in rules:
+            if allowed_op not in (operation, "pub_sub"):
+                continue
+            if self._topic_matches(pattern, topic):
+                return True, "authorized"
+        return False, "topic_scope_violation"
+
+    @staticmethod
+    def _topic_matches(pattern: str, topic: str) -> bool:
+        """MQTT-style match: a trailing '#' is a multi-level wildcard."""
+        if pattern.endswith("#"):
+            return topic.startswith(pattern[:-1])
+        return pattern == topic
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PoP-challenge nonce cache (single-use nonce enforcement)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def is_nonce_replay(self, nonce: str, now: Optional[float] = None) -> bool:
+        """
+        True if this nonce is already present in the cache within its lifetime —
+        i.e. a PoP challenge nonce is being reused. Expired entries are purged.
+        """
+        now = now if now is not None else time.time()
+        # Purge entries older than the replay window before checking.
+        self._nonce_cache = {
+            n: ts for n, ts in self._nonce_cache.items()
+            if now - ts <= cfg.security.replay_window_s
+        }
+        seen = self._nonce_cache.get(nonce)
+        if seen is None:
+            return False
+        return (now - seen) <= cfg.security.replay_window_s
+
+    def register_nonce(self, nonce: str, now: Optional[float] = None) -> None:
+        """Record a freshly issued/consumed PoP nonce for replay detection."""
+        self._nonce_cache[nonce] = now if now is not None else time.time()
 
     def record_session_failure(self, device_id: str) -> None:
         """Increment the failure counter for a device session."""
