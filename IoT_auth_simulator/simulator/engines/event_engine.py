@@ -436,11 +436,15 @@ class EventEngine:
         battery_level:    Optional[float] = None,
         firmware_version: Optional[str]   = None,
         start_time:       Optional[float] = None,
+        driver:           object          = None,
     ):
         self.device_id        = device_id
         self.gateway_id       = gateway_id
         self.auth_server_id   = auth_server_id
         self.broker_id        = broker_id
+        # Phase C: optional SessionDriver that drives the real domain entities.
+        # None → pure synthesised generation (default, unchanged behaviour).
+        self.driver           = driver
         self.source_ip        = source_ip or f"10.0.1.{random.randint(1, 254)}"
         self.battery_level    = battery_level if battery_level is not None \
                                 else round(random.uniform(0.0, 100.0), 1)
@@ -706,6 +710,15 @@ class EventEngine:
             te.record_failure()                              # Phase 3
         if event_type == EventType.RETRY:
             ctx["n_retries_fired"] += 1
+
+        # ── Phase C: drive the real domain entities (flag-gated; no-op if None) ─
+        # Exercises ECDH / enrollment / token issuance / broker sessions on the
+        # core/ objects. Only override is the real token id at issuance; all
+        # leakage-tuned feature values are left untouched.
+        if self.driver is not None:
+            overrides = self.driver.on_event(event_type, rs, rs["current_ts"])
+            if overrides:
+                rs.update(overrides)
 
         # ── Capture step latencies (mapped to the six lifecycle phases) ───────
         delay_ms = delay * 1000

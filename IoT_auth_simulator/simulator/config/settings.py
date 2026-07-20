@@ -51,6 +51,15 @@ class SimulationConfig:
     # Gateway pool size
     num_gateways: int = 5
 
+    # Phase C — drive the real core/ domain entities (Device, Gateway,
+    # AuthServer, MQTTBroker) during generation so ECDH / token issuance /
+    # validation and broker sessions are exercised end-to-end. Off by default:
+    # when off, generation is byte-for-byte the synthesised pipeline; when on,
+    # the entities are exercised and the emitted token id is the one the
+    # AuthServer actually minted, but the leakage-tuned feature values are
+    # unchanged.
+    wire_entities: bool = False
+
     # Output
     output_filename: str = "iot_auth_dataset.csv"
 

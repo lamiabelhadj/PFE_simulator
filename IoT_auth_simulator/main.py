@@ -40,6 +40,9 @@ def parse_args() -> argparse.Namespace:
                    help="Output CSV filename")
     p.add_argument("--parquet", action="store_true",
                    help="Also save a Parquet copy")
+    p.add_argument("--wire-entities", action="store_true",
+                   help="Drive the real core/ domain entities (ECDH, token "
+                        "issuance/validation, broker sessions) during generation")
     return p.parse_args()
 
 
@@ -52,6 +55,7 @@ def main() -> None:
     cfg.simulation.num_devices         = args.devices
     cfg.simulation.random_seed         = args.seed
     cfg.simulation.output_filename     = args.out
+    cfg.simulation.wire_entities       = args.wire_entities
 
     print("=" * 60)
     print("  IoT Authentication Simulator")
@@ -61,6 +65,7 @@ def main() -> None:
     print(f"  Attack sessions: {args.attack}")
     print(f"  Attack split   : {cfg.simulation.attack_distribution}")
     print(f"  Random seed    : {args.seed}")
+    print(f"  Wire entities  : {'on' if args.wire_entities else 'off'}")
     print(f"  Output         : {DATA_DIR / args.out}")
     print("=" * 60)
 

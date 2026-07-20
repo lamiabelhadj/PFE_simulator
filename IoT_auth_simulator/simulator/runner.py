@@ -13,6 +13,7 @@ Architecture (Phase 2)
 
 import random
 import uuid
+from collections import defaultdict
 from typing import Callable, List, Optional, Tuple
 
 from simulator.config.settings import cfg
@@ -45,6 +46,20 @@ def run_simulation(
     auth_server_id = "auth-01"
     broker_id      = "broker-01"
 
+    # ── Phase C: optionally instantiate the real domain entities and drive them
+    # through generation (flag-gated via cfg.simulation.wire_entities). ─────────
+    wired = getattr(cfg.simulation, "wire_entities", False)
+    entities = None
+    if wired:
+        from simulator.core.gateway import Gateway
+        from simulator.core.auth_server import AuthServer, MQTTBroker
+        entities = {
+            "auth_server": AuthServer(server_id=auth_server_id),
+            "broker":      MQTTBroker(broker_id=broker_id),
+            "gateways":    {gid: Gateway(gateway_id=gid) for gid in gateway_ids},
+            "stats":       defaultdict(int),
+        }
+
     # Build the full scenario batch (normal + attack, shuffled).
     scenario_engine = ScenarioEngine(seed=cfg.simulation.random_seed)
     specs = scenario_engine.batch(
@@ -60,6 +75,17 @@ def run_simulation(
         device     = random.choice(devices)
         gateway_id = gateway_ids[i % len(gateway_ids)]
 
+        driver = None
+        if wired:
+            from simulator.core.session_driver import SessionDriver
+            driver = SessionDriver(
+                device      = device,
+                gateway     = entities["gateways"][gateway_id],
+                auth_server = entities["auth_server"],
+                broker      = entities["broker"],
+                stats       = entities["stats"],
+            )
+
         engine = EventEngine(
             device_id        = device.device_id,
             gateway_id       = gateway_id,
@@ -68,6 +94,7 @@ def run_simulation(
             source_ip        = device.ip_address,
             battery_level    = device.battery_level,
             firmware_version = device.firmware_version,
+            driver           = driver,
         )
         pair = engine.execute(spec)
         sequences.append(pair)
@@ -76,4 +103,25 @@ def run_simulation(
             label = "normal" if not spec.is_anomaly else spec.anomaly_type
             progress_callback(i + 1, total, f"Session {i + 1}/{total} [{label}]")
 
+    if wired:
+        _print_entity_summary(entities)
+
     return sequences
+
+
+def _print_entity_summary(entities: dict) -> None:
+    """Report the aggregate activity of the real domain entities after a wired run."""
+    st  = entities["stats"]
+    a   = entities["auth_server"]
+    b   = entities["broker"]
+    gws = entities["gateways"]
+    total_gw_sessions = sum(len(g.sessions) for g in gws.values())
+    total_nonces      = sum(len(g._nonce_cache) for g in gws.values())
+    print("  ── Domain entities exercised (wire_entities=on) ──")
+    print(f"    ECDH exchanges     : {st['ecdh_exchanges']:,}")
+    print(f"    Enrollments        : {a.total_enrollments:,}")
+    print(f"    Tokens issued      : {a.total_tokens_issued:,}")
+    print(f"    Broker CONNECTs    : {b.total_connects:,}")
+    print(f"    Broker PUBLISHes   : {b.total_publishes:,}")
+    print(f"    Gateway sessions   : {total_gw_sessions:,}")
+    print(f"    Nonces cached      : {total_nonces:,}")
