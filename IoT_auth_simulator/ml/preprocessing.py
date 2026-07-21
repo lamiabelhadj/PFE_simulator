@@ -39,6 +39,7 @@ _DROP_ALWAYS: List[str] = [
     "scenario_id", "session_id", "device_id", "gateway_id",
     "message_id", "payload_hash",
     "anomaly_type", "anomaly_phase",   # aliases of attack_type / attack_phase
+    "attacker_class",                  # label metadata (leaks is_anomaly + type)
 ]
 
 # High-cardinality strings whose information is captured by numeric proxies:

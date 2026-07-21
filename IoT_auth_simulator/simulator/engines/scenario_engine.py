@@ -238,6 +238,8 @@ ANOMALY_INJECTION_POSITION: Dict[str, int] = {
     "identity_token_mismatch":  6,   # after ENROLLMENT_CONFIRMED  (state: ENROLLED)
     "abnormal_renewal":        12,   # after TOKEN_PRESENTED       (state: TOKEN_PRESENTED)
     "duplicate_sequence":      14,   # after SESSION_OPENED        (state: SESSION_OPEN)
+    "connect_flood":            6,   # after ENROLLMENT_CONFIRMED  (state: ENROLLED)
+    "delayed_connect":          6,   # after ENROLLMENT_CONFIRMED  (state: ENROLLED / PAIRED)
 }
 
 
@@ -428,6 +430,33 @@ class ScenarioEngine:
             [self.nonce_reuse()            for _ in range(n_each)] +
             [self.timestamp_inconsistency() for _ in range(n_each)] +
             [self.duplicate_sequence()     for _ in range(n_each)]
+        )
+        random.shuffle(specs)
+        return specs
+
+    # ── Flooding / protocol-abuse variant factories ───────────────────────────
+
+    def abnormal_failure_variant(self) -> ScenarioSpec:
+        """Burst of failed auth attempts from one device (should be rate-limited)."""
+        return self.anomaly("abnormal_failure_rate")
+
+    def connect_flood(self) -> ScenarioSpec:
+        """High rate of MQTT CONNECT packets with invalid credentials (DoS)."""
+        return self.anomaly("connect_flood")
+
+    def delayed_connect(self) -> ScenarioSpec:
+        """Half-open CONNECT: TCP handshake completes then stalls, holding resources."""
+        return self.anomaly("delayed_connect")
+
+    def flooding_batch(self, n_each: int = 25) -> List[ScenarioSpec]:
+        """
+        Return n_each instances of each of the 3 flooding / protocol-abuse
+        variants, shuffled. Convenience method for DoS-focused generation.
+        """
+        specs = (
+            [self.abnormal_failure_variant() for _ in range(n_each)] +
+            [self.connect_flood()            for _ in range(n_each)] +
+            [self.delayed_connect()          for _ in range(n_each)]
         )
         random.shuffle(specs)
         return specs

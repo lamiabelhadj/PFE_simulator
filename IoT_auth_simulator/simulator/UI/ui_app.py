@@ -449,6 +449,8 @@ PALETTE = {
     "access_without_auth":     "#36d6c3",
     "abnormal_failure_rate":   "#ff8a4c",
     "abnormal_renewal":        "#5aa9ff",
+    "connect_flood":           "#d98cff",
+    "delayed_connect":         "#8ce0ff",
 }
 
 plt.rcParams.update({
@@ -598,8 +600,9 @@ def render_load():
         "replay_token", "nonce_reuse", "timestamp_inconsistency",
         "duplicate_sequence", "impersonation", "identity_token_mismatch",
         "access_without_auth", "abnormal_failure_rate", "abnormal_renewal",
+        "connect_flood", "delayed_connect",
     ]
-    default_weights = [12, 12, 12, 11, 12, 12, 12, 9, 8]
+    default_weights = [10, 10, 10, 10, 10, 10, 10, 9, 7, 7, 7]
 
     dist_cols = st.columns(3)
     raw_weights = {}
