@@ -45,24 +45,6 @@ SEVERITY_MAP: Dict[str, str] = {
     "identity_token_mismatch":  "high",
     "abnormal_renewal":         "medium",
     "duplicate_sequence":       "medium",
-    "connect_flood":            "high",
-    "delayed_connect":          "high",
-    "normal":                   "none",
-}
-
-# ── Attacker-class map (non_invasive | invasive | both) ───────────────────────
-ATTACKER_CLASS_MAP: Dict[str, str] = {
-    "replay_token":             "non_invasive",
-    "nonce_reuse":              "non_invasive",
-    "timestamp_inconsistency":  "non_invasive",
-    "access_without_auth":      "non_invasive",
-    "impersonation":            "non_invasive",
-    "identity_token_mismatch":  "non_invasive",
-    "duplicate_sequence":       "non_invasive",
-    "abnormal_failure_rate":    "both",
-    "connect_flood":            "both",
-    "delayed_connect":          "both",
-    "abnormal_renewal":         "invasive",
     "normal":                   "none",
 }
 
@@ -195,8 +177,6 @@ CONTINUE_AFTER_INJECTION: Dict[str, float] = {
     "identity_token_mismatch": 0.0,
     "access_without_auth":     0.0,
     "abnormal_failure_rate":   0.0,
-    "connect_flood":           0.0,   # flood terminates on the anomaly
-    "delayed_connect":         0.0,   # half-open connect stalls / times out
 }
 
 # Realistic TCP handshake flag combinations observed at connection level.
@@ -217,8 +197,6 @@ _PAIRING_FAIL_PROB = {
     "impersonation":           0.35,
     "identity_token_mismatch": 0.30,
     "access_without_auth":     0.25,
-    "connect_flood":           0.20,
-    "delayed_connect":         0.30,
 }
 
 
@@ -252,7 +230,6 @@ def _sample_pairing_result(is_attack: bool, anomaly_type: Optional[str]) -> int:
 RATE_BASED_ATTACKS = {
     "abnormal_failure_rate",   # brute-force / repeated auth hammering
     "duplicate_sequence",      # full auth sequence replayed → extra request volume
-    "connect_flood",           # burst of MQTT CONNECT packets
 }
 
 
@@ -410,10 +387,9 @@ class SessionContext:
     s6_latency_ms: float   # re-auth / renewal
 
     # ── Labels (Phase 0 naming) ───────────────────────────────────────────────
-    attack_type:   str   # "normal" | anomaly_label
-    attack_phase:  str   # event_type of injected anomaly | "none"
-    severity:      str   # none | medium | high | critical
-    attacker_class: str  # none | non_invasive | invasive | both
+    attack_type:  str   # "normal" | anomaly_label
+    attack_phase: str   # event_type of injected anomaly | "none"
+    severity:     str   # none | medium | high | critical
 
     # ── Phase 4: per-variant replay signals (default 0 for non-replay sessions) ─
     token_age_at_replay:     float = 0.0  # replay_token: seconds since token was issued
@@ -426,10 +402,6 @@ class SessionContext:
     token_device_mismatch:      int = 0   # identity_token_mismatch: foreign token used
     unauthorized_access_attempt: int = 0  # access_without_auth: ACCESS_REQUEST before auth
     steps_before_access:        int = 0   # access_without_auth: auth steps completed before attempt
-
-    # ── Flooding / protocol-abuse signals (default 0 for non-flood sessions) ──
-    connection_burst_count: int   = 0     # connect_flood: CONNECTs in the burst window
-    stall_duration_s:       float = 0.0   # delayed_connect: half-open hold time
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -552,9 +524,6 @@ class EventEngine:
             "token_device_mismatch":      0,
             "unauthorized_access_attempt": 0,
             "steps_before_access":        0,
-            # Flooding / protocol-abuse signals
-            "connection_burst_count":     0,
-            "stall_duration_s":           0.0,
         }
 
         # ── Run normal steps ──────────────────────────────────────────────────
@@ -597,21 +566,6 @@ class EventEngine:
             # duplicate_sequence: a complete auth sequence replayed inside open session
             if spec.anomaly_type == "duplicate_sequence":
                 ctx["duplicate_session_count"] = 1
-
-            # connect_flood: a burst of MQTT CONNECT packets with invalid creds
-            if spec.anomaly_type == "connect_flood":
-                burst = cfg.attack.dos_connection_burst
-                ctx["connection_burst_count"] = random.randint(burst, burst * 4)
-                ctx["credential_status"]      = 0
-
-            # delayed_connect: TCP handshake done, then the client stalls before
-            # sending CONNECT — model the hold time and push the timeout out.
-            if spec.anomaly_type == "delayed_connect":
-                stall = max(1.0, random.gauss(cfg.attack.delayed_connect_stall_s,
-                                              cfg.attack.delayed_connect_stall_s * 0.4))
-                rs["current_ts"]             += stall
-                ctx["stall_duration_s"]       = round(stall, 2)
-                ctx["connection_burst_count"] = 1
 
             # State the legitimate flow had reached before the injection — the
             # continuation (below) resumes from here so the session can complete.
@@ -923,9 +877,8 @@ class EventEngine:
         claimed_id = ctx.get("identity_claim", self.device_id)
 
         # ── Attack labels (Phase 3 fix: correct type + SEVERITY_MAP) ──────────
-        attack_phase   = spec.injection_event.value if is_attack else "none"
-        severity       = SEVERITY_MAP.get(spec.anomaly_type, "none") if is_attack else "none"
-        attacker_class = ATTACKER_CLASS_MAP.get(spec.anomaly_type, "none") if is_attack else "none"
+        attack_phase = spec.injection_event.value if is_attack else "none"
+        severity     = SEVERITY_MAP.get(spec.anomaly_type, "none") if is_attack else "none"
 
         return SessionContext(
             # Identity
@@ -995,7 +948,6 @@ class EventEngine:
             attack_type             = attack_type,
             attack_phase            = attack_phase,
             severity                = severity,
-            attacker_class          = attacker_class,
             # Phase 4: replay variant signals
             token_age_at_replay     = ctx.get("token_age_at_replay",     0.0),
             nonce_age_at_reuse      = ctx.get("nonce_age_at_reuse",      0.0),
@@ -1006,9 +958,6 @@ class EventEngine:
             token_device_mismatch       = ctx.get("token_device_mismatch",       0),
             unauthorized_access_attempt = ctx.get("unauthorized_access_attempt", 0),
             steps_before_access         = ctx.get("steps_before_access",         0),
-            # Flooding / protocol-abuse signals
-            connection_burst_count      = ctx.get("connection_burst_count",      0),
-            stall_duration_s            = ctx.get("stall_duration_s",            0.0),
         )
 
     # ══════════════════════════════════════════════════════════════════════════

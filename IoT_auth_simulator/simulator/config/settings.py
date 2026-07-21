@@ -37,17 +37,15 @@ class SimulationConfig:
 
     # Attack type distribution (must sum to 1.0)
     attack_distribution: Dict[str, float] = field(default_factory=lambda: {
-        "replay_token":            0.10,
-        "nonce_reuse":             0.10,
-        "timestamp_inconsistency": 0.10,
-        "duplicate_sequence":      0.10,
-        "impersonation":           0.10,
-        "identity_token_mismatch": 0.10,
-        "access_without_auth":     0.10,
+        "replay_token":            0.12,
+        "nonce_reuse":             0.12,
+        "timestamp_inconsistency": 0.12,
+        "duplicate_sequence":      0.11,
+        "impersonation":           0.12,
+        "identity_token_mismatch": 0.12,
+        "access_without_auth":     0.12,
         "abnormal_failure_rate":   0.09,
-        "abnormal_renewal":        0.07,
-        "connect_flood":           0.07,
-        "delayed_connect":         0.07,
+        "abnormal_renewal":        0.08,
     })
 
     # Gateway pool size
@@ -212,9 +210,8 @@ class AttackConfig:
     impersonation_ip_change_prob: float = 0.6
 
     # DoS / Flooding
-    dos_connection_burst:    int   = 50    # simultaneous connections (CONNECT flood)
+    dos_connection_burst:    int   = 50    # simultaneous connections
     dos_duration_s:          float = 10.0  # flood window
-    delayed_connect_stall_s: float = 30.0  # half-open CONNECT hold time (mean)
 
     # Severity mapping per attack type
     severity_map: Dict[str, str] = field(default_factory=lambda: {
@@ -227,26 +224,6 @@ class AttackConfig:
         "access_without_auth":     "high",
         "abnormal_failure_rate":   "high",
         "abnormal_renewal":        "medium",
-        "connect_flood":           "high",
-        "delayed_connect":         "high",
-    })
-
-    # Attacker-class taxonomy per attack type (functional-model threat model):
-    #   non_invasive — network-layer attacker, no valid credentials
-    #   invasive     — holds valid credentials (compromised device)
-    #   both         — achievable by either class
-    attacker_class_map: Dict[str, str] = field(default_factory=lambda: {
-        "replay_token":            "non_invasive",
-        "nonce_reuse":             "non_invasive",
-        "timestamp_inconsistency": "non_invasive",
-        "duplicate_sequence":      "non_invasive",
-        "impersonation":           "non_invasive",
-        "identity_token_mismatch": "non_invasive",
-        "access_without_auth":     "non_invasive",
-        "abnormal_failure_rate":   "both",
-        "connect_flood":           "both",
-        "delayed_connect":         "both",
-        "abnormal_renewal":        "invasive",
     })
 
 

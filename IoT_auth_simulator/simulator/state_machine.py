@@ -37,13 +37,12 @@ a device after repeated failures.
 
 Anomaly coverage
 ────────────────
-11 anomaly types from the threat model are mapped to invalid transitions:
-   1. replay_token               7. identity_token_mismatch
-   2. nonce_reuse                8. abnormal_renewal
-   3. timestamp_inconsistency    9. duplicate_sequence
-   4. access_without_auth       10. connect_flood     (MQTT CONNECT flood)
-   5. abnormal_failure_rate     11. delayed_connect   (slow/half-open CONNECT)
-   6. impersonation
+9 anomaly types from the threat model are mapped to invalid transitions:
+  1. replay_token               6. impersonation
+  2. nonce_reuse                7. identity_token_mismatch
+  3. timestamp_inconsistency    8. abnormal_renewal
+  4. access_without_auth        9. duplicate_sequence
+  5. abnormal_failure_rate
 """
 
 import random
@@ -257,23 +256,6 @@ ANOMALY_TRANSITIONS: Dict[str, List[Tuple[AuthState, EventType]]] = {
     "duplicate_sequence": [
         (AuthState.SESSION_OPEN,  EventType.DISCOVERY),
         (AuthState.AUTHENTICATED, EventType.DISCOVERY),
-    ],
-
-    # 10. MQTT CONNECT flood
-    #     A burst of MQTT CONNECT attempts (SESSION_OPENED) with invalid
-    #     credentials, skipping token validation. Aims to exhaust the gateway /
-    #     broker. Modelled after the CONNECT-flood family in DoS/DDoS-MQTT-IoT.
-    "connect_flood": [
-        (AuthState.ENROLLED,       EventType.SESSION_OPENED),
-        (AuthState.AUTH_REQUESTED, EventType.SESSION_OPENED),
-    ],
-
-    # 11. Delayed / half-open CONNECT
-    #     The TCP handshake completes but the client stalls before sending the
-    #     CONNECT payload, holding gateway resources open until it times out.
-    "delayed_connect": [
-        (AuthState.PAIRED,   EventType.TIMEOUT),
-        (AuthState.ENROLLED, EventType.TIMEOUT),
     ],
 }
 

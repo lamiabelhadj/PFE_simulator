@@ -26,7 +26,7 @@ def _print(msg: str) -> None:
         print(msg.encode("ascii", errors="replace").decode("ascii"))
 
 from simulator.event_model import AuthEvent, AuthState, EventResult, EventType
-from simulator.engines.event_engine import SessionContext, SEVERITY_MAP, ATTACKER_CLASS_MAP
+from simulator.engines.event_engine import SessionContext, SEVERITY_MAP
 
 # Type alias for the two accepted input formats
 SequenceInput = Union[
@@ -297,25 +297,21 @@ def _build_row(
 
     # ── Labels (Phase 0 naming + Phase 2 additions) ───────────────────────────
     if ctx:
-        row["is_anomaly"]     = int(getattr(ctx, "attack_type", "normal") != "normal")
-        row["attack_type"]    = getattr(ctx, "attack_type", "normal")
-        row["attack_phase"]   = getattr(ctx, "attack_phase", "none")
-        row["severity"]       = getattr(ctx, "severity", "none")
-        row["attacker_class"] = getattr(ctx, "attacker_class", "none")
+        row["is_anomaly"]   = int(getattr(ctx, "attack_type", "normal") != "normal")
+        row["attack_type"]  = getattr(ctx, "attack_type", "normal")
+        row["attack_phase"] = getattr(ctx, "attack_phase", "none")
+        row["severity"]     = getattr(ctx, "severity", "none")
     else:
         attack_evs = [e for e in events if getattr(e, "anomaly_label", None) or getattr(e, "source_context", "") == "attack"]
         row["is_anomaly"]   = int(bool(attack_evs))
         if attack_evs:
-            lbl = attack_evs[0].anomaly_label
-            row["attack_type"]    = lbl if lbl else "attack"
-            row["attack_phase"]   = attack_evs[0].event_type.value
-            row["severity"]       = SEVERITY_MAP.get(lbl, "medium") if lbl else "medium"
-            row["attacker_class"] = ATTACKER_CLASS_MAP.get(lbl, "non_invasive") if lbl else "non_invasive"
+            row["attack_type"]  = attack_evs[0].anomaly_label if attack_evs[0].anomaly_label else "attack"
+            row["attack_phase"] = attack_evs[0].event_type.value
+            row["severity"]     = SEVERITY_MAP.get(attack_evs[0].anomaly_label, "medium") if attack_evs[0].anomaly_label else "medium"
         else:
-            row["attack_type"]    = "normal"
-            row["attack_phase"]   = "none"
-            row["severity"]       = "none"
-            row["attacker_class"] = "none"
+            row["attack_type"]  = "normal"
+            row["attack_phase"] = "none"
+            row["severity"]     = "none"
 
     # ── Phase 4: replay variant signals ──────────────────────────────────────
     if ctx:
@@ -340,14 +336,6 @@ def _build_row(
         row["token_device_mismatch"]       = 0
         row["unauthorized_access_attempt"] = 0
         row["steps_before_access"]         = 0
-
-    # ── Phase D: flooding / protocol-abuse signals ────────────────────────────
-    if ctx:
-        row["connection_burst_count"] = getattr(ctx, "connection_burst_count", 0)
-        row["stall_duration_s"]       = getattr(ctx, "stall_duration_s",       0.0)
-    else:
-        row["connection_burst_count"] = 0
-        row["stall_duration_s"]       = 0.0
 
     return row
 

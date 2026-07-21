@@ -246,13 +246,12 @@ class AuthEvent:
 
     # ── Ground truth ──────────────────────────────────────────────────────────
     # None  → normal event
-    # str   → one of the 11 anomaly labels:
+    # str   → one of the 9 anomaly labels:
     #   "replay_token"           | "nonce_reuse"
     #   "timestamp_inconsistency"| "access_without_auth"
     #   "abnormal_failure_rate"  | "impersonation"
     #   "identity_token_mismatch"| "abnormal_renewal"
-    #   "duplicate_sequence"     | "connect_flood"
-    #   "delayed_connect"
+    #   "duplicate_sequence"
     anomaly_label: Optional[str] = field(default=None)
 
     # ══════════════════════════════════════════════════════════════════════════
