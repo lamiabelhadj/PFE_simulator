@@ -160,6 +160,42 @@ CONTINUE_AFTER_INJECTION: Dict[str, float] = {
     "abnormal_failure_rate":   0.0,
 }
 
+# ── Detection realism: stealth (false negatives) & benign triggers (false pos) ─
+# Without these, every attack sets at least one deterministic detector flag
+# (identity_claim_mismatch, replay_window_violation, …) and every normal sets
+# none, so the union of those flags == is_anomaly and ANY classifier scores ~100%
+# — unrealistic. These two knobs reintroduce the overlap real IDS datasets have.
+#
+# STEALTH_FRACTION[type] = fraction of that attack type that EVADES detection:
+# the session is a genuine attack (is_anomaly stays 1) but leaves no explicit
+# detector signal — the injected event is accepted (no invalid-transition
+# failure, no forced state-jump), the per-type flags keep their benign defaults,
+# and rate-based traffic is not elevated. Such sessions are (near-)
+# indistinguishable from normal traffic → irreducible false negatives that cap
+# recall below 1. Protocol-logic attacks (replay/nonce/timestamp) are stealthier
+# than loud identity/flooding attacks. Raise these to make detection harder.
+# Operating point: HALF stealth — chosen to give a strong-but-believable LR
+# result (F1 ~0.95, recall ~0.92) without returning to the perfectly-separable
+# regime. Double these values (0.25/0.20/0.15/0.10) for the harder, more
+# realistic setting, or set to ~0 for the (too-perfect) no-evasion regime.
+STEALTH_FRACTION: Dict[str, float] = {
+    "replay_token":            0.125,
+    "nonce_reuse":             0.125,
+    "timestamp_inconsistency": 0.125,
+    "duplicate_sequence":      0.10,
+    "abnormal_renewal":        0.10,
+    "impersonation":           0.075,
+    "identity_token_mismatch": 0.075,
+    "access_without_auth":     0.05,
+    "abnormal_failure_rate":   0.05,
+}
+DEFAULT_STEALTH = 0.075
+
+# Fraction of NORMAL sessions that exhibit a benign-but-suspicious condition
+# (a roaming device changing source IP, a flaky link causing extra auth
+# retries) without being an attack → false positives that cap precision below 1.
+FALSE_POSITIVE_FRACTION = 0.06
+
 # Realistic TCP handshake flag combinations observed at connection level.
 # A completed connection almost always shows the full handshake regardless of
 # whether the application-layer behaviour is malicious, so the distribution
@@ -505,19 +541,35 @@ class EventEngine:
             "token_device_mismatch":      0,
             "unauthorized_access_attempt": 0,
             "steps_before_access":        0,
+            # Detection realism: True for an evasive (stealth) attack session.
+            # Read by _build_context to also suppress rate-based traffic; never
+            # exported as a feature.
+            "_stealth":                   False,
         }
 
-        # ── Run normal steps ──────────────────────────────────────────────────
+        # ── Stealth decision (attacks only) ───────────────────────────────────
+        # A stealth attack EVADES detection: it runs the FULL legitimate flow with
+        # no injected anomaly, so its telemetry is indistinguishable from a normal
+        # session. It stays labelled as an attack (is_anomaly=1) but carries no
+        # detector signal — a genuine false negative that keeps recall realistic
+        # (< 1), modelling an attacker that perfectly mimics legitimate behaviour.
+        stealth = (spec.is_anomaly
+                   and random.random() < STEALTH_FRACTION.get(spec.anomaly_type, DEFAULT_STEALTH))
+        ctx["_stealth"] = stealth
+
+        # ── Run legitimate steps ──────────────────────────────────────────────
+        # Detected attacks run up to the injection point (then inject below);
+        # normal sessions and stealth attacks run the full flow.
         steps_to_run = (
             spec.normal_steps[:spec.injection_position]
-            if spec.is_anomaly else spec.normal_steps
+            if (spec.is_anomaly and not stealth) else spec.normal_steps
         )
 
         for event_type in steps_to_run:
             self._run_step(event_type, sm, rs, ctx, te, events, profile, spec)
 
-        # ── Anomaly injection ─────────────────────────────────────────────────
-        if spec.is_anomaly:
+        # ── Anomaly injection (detected attacks only) ─────────────────────────
+        if spec.is_anomaly and not stealth:
             delay          = self._sample_delay(spec.injection_event, profile)
             rs["current_ts"] += delay
             # Timestamp the injected event off the (monotonic) session clock.
@@ -526,34 +578,29 @@ class EventEngine:
             # and the session-duration span stay physically consistent.
             injected_ts = rs["current_ts"]
 
-            # ── Phase 4: per-variant enrichment before state machine step ────────
-
-            # replay_token: token presented well outside the allowed replay window
+            # ── Per-variant detector-signal enrichment ────────────────────────
+            # replay_token: token presented well outside the replay window
             if spec.anomaly_type == "replay_token":
                 stolen_age = random.uniform(120, 600)
                 te.record_token_issued(rs["current_ts"] - stolen_age)
                 te.record_token_presented(rs["current_ts"])
                 ctx["replay_window_violation"] = 1
                 ctx["token_age_at_replay"]     = round(stolen_age, 2)
+                ctx["credential_status"]       = 0
 
-            # nonce_reuse: reuse the existing nonce value so n_nonce_reuses > 0
-            # nonce stays as-is — we deliberately do NOT generate a new one here.
-            # The same value will appear on both the original NONCE_RECEIVED event
+            # nonce_reuse: reuse the existing nonce value so n_nonce_reuses > 0.
+            # The same value appears on both the original NONCE_RECEIVED event
             # and this injected event, making output_views count it as a reuse.
             if spec.anomaly_type == "nonce_reuse" and rs["nonce"] is not None:
                 ctx["nonce_age_at_reuse"] = round(te.nonce_age(rs["current_ts"]), 2)
 
-            # timestamp_inconsistency: the device declares a time in the past on
-            # this event only. Rewind injected_ts (the event's stamped time), NOT
-            # the running session clock — otherwise the whole session's duration
-            # goes negative, which by itself perfectly flags the attack. The
-            # backward-jump magnitude is the honest signal (timestamp_delta_s).
+            # timestamp_inconsistency: device declares a past time on this event
             if spec.anomaly_type == "timestamp_inconsistency":
                 delta            = random.uniform(400, 900)
                 injected_ts      = rs["current_ts"] - delta
                 ctx["timestamp_delta_s"] = round(delta, 2)
 
-            # duplicate_sequence: a complete auth sequence replayed inside open session
+            # duplicate_sequence: full auth sequence replayed inside open session
             if spec.anomaly_type == "duplicate_sequence":
                 ctx["duplicate_session_count"] = 1
 
@@ -561,7 +608,6 @@ class EventEngine:
             # continuation (below) resumes from here so the session can complete.
             pre_injection_state = sm.state
             sm.force(spec.injection_from_state)
-
             try:
                 sm.advance(spec.injection_event)
                 new_state = sm.state
@@ -571,18 +617,15 @@ class EventEngine:
             identity_claim = None
 
             # ── Phase 5: identity / session anomaly enrichment ────────────────
-
             if spec.anomaly_type == "impersonation":
-                identity_claim                   = f"victim-{str(uuid.uuid4())[:8]}"
-                ctx["source_ip_change"]          = 1
-                ctx["credential_status"]         = 0
-                ctx["identity_claim"]            = identity_claim
-                ctx["identity_claim_mismatch"]   = 1   # claimed_id != device_id
+                identity_claim                 = f"victim-{str(uuid.uuid4())[:8]}"
+                ctx["source_ip_change"]        = 1
+                ctx["credential_status"]       = 0
+                ctx["identity_claim"]          = identity_claim
+                ctx["identity_claim_mismatch"] = 1   # claimed_id != device_id
 
             elif spec.anomaly_type == "identity_token_mismatch":
                 # Attacker presents a token issued for a *different* device.
-                # Overwrite token_id with a foreign one so it never matches
-                # the token that was (or would have been) issued in this session.
                 rs["token_id"]                 = f"foreign-{str(uuid.uuid4())}"
                 identity_claim                 = f"victim-{str(uuid.uuid4())[:8]}"
                 ctx["identity_claim"]          = identity_claim
@@ -591,23 +634,18 @@ class EventEngine:
                 ctx["identity_claim_mismatch"] = 1
 
             elif spec.anomaly_type == "access_without_auth":
-                # Device tries to access a resource before any auth has completed.
-                ctx["credential_status"]              = 0  # no auth = no valid credential
-                ctx["unauthorized_access_attempt"]    = 1
-                ctx["steps_before_access"]            = spec.injection_position
+                ctx["credential_status"]           = 0  # no auth = no valid credential
+                ctx["unauthorized_access_attempt"] = 1
+                ctx["steps_before_access"]         = spec.injection_position
 
-            if spec.anomaly_type in {"replay_token"}:
-                ctx["credential_status"] = 0
-
-            # For nonce_reuse injection: carry the original nonce so output_views
-            # detects the duplicate (same nonce value on two distinct events).
+            # Carry the original nonce so output_views detects the duplicate.
             injected_nonce = (
                 rs["nonce"]
                 if spec.anomaly_type == "nonce_reuse"
                 else (rs["nonce"] if spec.injection_event in NONCE_CARRYING_EVENTS else None)
             )
-
             inj_token_id = rs["token_id"] if spec.injection_event in TOKEN_CARRYING_EVENTS else None
+
             ev = self._make_event(
                 event_type=spec.injection_event, prev_state=spec.injection_from_state,
                 new_state=new_state, result=EventResult.FAILURE,
@@ -626,14 +664,29 @@ class EventEngine:
             events.append(ev)
 
             # ── Continuation: resume the legitimate flow for a fraction of the
-            # in-session replay/renewal anomalies so they can still reach
-            # SESSION_OPENED / ACCESS_GRANTED / SESSION_CLOSED and overlap normal
-            # sessions on n_events (breaking those as label shortcuts). ─────────
-            if (spec.injection_position < len(spec.normal_steps)
-                    and random.random() < CONTINUE_AFTER_INJECTION.get(spec.anomaly_type, 0.0)):
+            # in-session replay/renewal anomalies so they still reach SESSION_OPENED
+            # / ACCESS_GRANTED / SESSION_CLOSED and overlap normal sessions. ──────
+            resume = random.random() < CONTINUE_AFTER_INJECTION.get(spec.anomaly_type, 0.0)
+            if spec.injection_position < len(spec.normal_steps) and resume:
                 sm.force(pre_injection_state)
                 for event_type in spec.normal_steps[spec.injection_position:]:
                     self._run_step(event_type, sm, rs, ctx, te, events, profile, spec)
+
+        # ── False positives: a fraction of benign sessions exhibit a suspicious-
+        # looking but legitimate condition with no attack present → keeps
+        # precision realistic (< 1). A minority trip an actual detector flag
+        # (clock-skew replay), the real-world source of IDS false alarms. ───────
+        elif random.random() < FALSE_POSITIVE_FRACTION:
+            roll = random.random()
+            if roll < 0.35:
+                ctx["source_ip_change"] = 1                       # device roamed networks
+            elif roll < 0.65:
+                ctx["failed_auth_count"] += random.randint(1, 2)  # flaky link retries
+            else:
+                # Legitimate token presented just outside a tight replay window
+                # because of clock skew — trips the replay detector, no attack.
+                ctx["replay_window_violation"] = 1
+                ctx["token_age_at_replay"]     = round(random.uniform(62, 95), 2)
 
         # ── Final auth_result reflects the accumulated state (post-continuation) ─
         ctx["auth_result"] = ctx["final_auth_result"]
@@ -783,8 +836,11 @@ class EventEngine:
 
         # Traffic intensity depends on the attack TYPE, not the label: only
         # genuinely rate-based attacks flood; protocol-logic attacks share the
-        # normal rate band (see _sample_traffic_rate / RATE_BASED_ATTACKS).
-        is_rate_based        = is_attack and attack_type in RATE_BASED_ATTACKS
+        # normal rate band (see _sample_traffic_rate / RATE_BASED_ATTACKS). A
+        # stealth (evasive) attack keeps the normal rate band too — flooding
+        # would give it away.
+        is_rate_based        = (is_attack and attack_type in RATE_BASED_ATTACKS
+                                and not ctx.get("_stealth", False))
         pkt_rate, msg_rate   = _sample_traffic_rate(is_rate_based)
 
         # ── Network features ──────────────────────────────────────────────────
