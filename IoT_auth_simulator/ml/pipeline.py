@@ -92,6 +92,7 @@ def run(
     save_results: bool = True,
     output_dir:   str  = "data/output",
     dist:         Optional[Dict[str, float]] = None,
+    drop_leakage: bool = False,
 ) -> Dict[str, EvalResult]:
     """
     End-to-end ML pipeline.
@@ -108,6 +109,9 @@ def run(
     save_results : write comparison CSV to output_dir
     output_dir   : where to save results CSV
     dist         : attack type distribution dict (must sum to 1.0)
+    drop_leakage : if True, drop the empirically-leaking features so the reported
+                   scores reflect only genuine attack signatures (honest lower
+                   bound). Results are saved to ml_results_<target>_honest.csv.
 
     Returns
     -------
@@ -132,7 +136,9 @@ def run(
     # ── Preprocessing ─────────────────────────────────────────────────────────
     if verbose:
         print(f"\n  Preprocessing …")
-    pre = Preprocessor(target=target, random_state=seed)
+        if drop_leakage:
+            print(f"  Honest mode: dropping empirically-leaking features")
+    pre = Preprocessor(target=target, random_state=seed, drop_leakage=drop_leakage)
     X_train, X_test, y_train, y_test = pre.fit_transform(df)
 
     if verbose:
@@ -181,7 +187,8 @@ def run(
         if save_results:
             out = Path(output_dir)
             out.mkdir(parents=True, exist_ok=True)
-            path = out / f"ml_results_{target}.csv"
+            suffix = "_honest" if drop_leakage else ""
+            path = out / f"ml_results_{target}{suffix}.csv"
             cmp_df.to_csv(path)
             if verbose:
                 print(f"\n  Results saved -> {path}")

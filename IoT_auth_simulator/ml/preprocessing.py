@@ -55,6 +55,30 @@ _LEAK_BINARY: List[str] = ["attack_type", "attack_phase", "severity"]
 # Columns that would leak the label when target = attack_type
 _LEAK_MULTICLASS: List[str] = ["is_anomaly", "attack_phase", "severity"]
 
+# Features that were empirically found to separate normal vs anomaly at
+# ROC-AUC >= ~0.75 in the *pre-fix* dataset (see feature_analysis_outputs/
+# leakage_features_to_drop.csv). These are structural / timing / rate aggregates
+# that leaked because the generator keyed them on the ground-truth label.
+#
+# Set drop_leakage=True to exclude them and report an HONEST lower-bound score
+# that reflects only the genuine attack signatures. Use this to (a) show a
+# defensible number before regenerating, and (b) as a regression check after the
+# generator fixes — once the generator no longer keys these on the label they
+# stop leaking and can safely be kept, so this list is expected to shrink.
+_KNOWN_LEAKAGE_FEATURES: List[str] = [
+    "pairing_result", "packet_rate", "inter_arrival_time", "visited_states",
+    "session_present", "n_events", "s5_latency_ms", "authorization_result",
+    "message_rate", "byte_rate", "keep_alive", "n_session_closed",
+    "n_access_granted", "reached_access_granted", "n_token_reuses",
+    "s4_latency_ms", "session_duration_s", "connection_duration",
+    "max_delay_s", "mean_delay_s", "failure_rate", "pairing_latency_ms",
+    "s2_latency_ms", "reached_session_open", "auth_latency_ms", "s3_latency_ms",
+    "n_token_validated", "n_access_request", "n_token_issued", "n_token_presented",
+    # additional strong timing leakers from the diagnostics not in the drop CSV
+    "s1_latency_ms", "s6_latency_ms", "min_delay_s", "payload_length",
+    "reached_authenticated", "n_authentication_success",
+]
+
 # Low-cardinality categoricals to OrdinalEncode
 _CATEGORICAL: List[str] = [
     "tcp_flags", "connack_code", "gateway_decision",
@@ -71,19 +95,24 @@ class Preprocessor:
     target      : column name to use as the label ("is_anomaly" or "attack_type")
     test_size   : fraction of data held out for testing
     random_state: reproducibility seed
+    drop_leakage: if True, also drop the empirically-leaking features listed in
+                  _KNOWN_LEAKAGE_FEATURES, yielding an honest lower-bound score
+                  that reflects only the genuine attack signatures
     """
 
     def __init__(
         self,
-        target:       str   = "is_anomaly",
-        test_size:    float = 0.20,
-        random_state: int   = 42,
+        target:        str   = "is_anomaly",
+        test_size:     float = 0.20,
+        random_state:  int   = 42,
+        drop_leakage:  bool  = False,
     ):
         if target not in ("is_anomaly", "attack_type"):
             raise ValueError("target must be 'is_anomaly' or 'attack_type'")
         self.target       = target
         self.test_size    = test_size
         self.random_state = random_state
+        self.drop_leakage = drop_leakage
 
         self._encoder = OrdinalEncoder(
             handle_unknown="use_encoded_value",
@@ -145,6 +174,8 @@ class Preprocessor:
         # ── Drop columns ──────────────────────────────────────────────────────
         leak_cols = _LEAK_BINARY if self.target == "is_anomaly" else _LEAK_MULTICLASS
         drop      = set(_DROP_ALWAYS + _DROP_HIGH_CARDINALITY + leak_cols + [self.target])
+        if self.drop_leakage:
+            drop |= set(_KNOWN_LEAKAGE_FEATURES)
         df.drop(columns=[c for c in drop if c in df.columns], inplace=True)
 
         # ── Identify categorical and numeric columns ───────────────────────────

@@ -166,7 +166,6 @@ def _build_row(
     ctx:    Optional[SessionContext],
 ) -> Dict:
     first = events[0]
-    last  = events[-1]
     row: Dict = {}
 
     # ── Phase 2: identifiers ──────────────────────────────────────────────────
@@ -254,7 +253,13 @@ def _build_row(
 
     # ── Phase 2: temporal ─────────────────────────────────────────────────────
     delays = [e.delay_since_previous_event for e in events]
-    row["session_duration_s"] = round(last.timestamp - first.timestamp, 4)
+    # Monotonic session span: latest stamped time minus the first event, clamped
+    # at 0. Using max() (not last) keeps a timestamp_inconsistency event's
+    # backward-dated stamp from producing a negative duration that would by
+    # itself flag the attack.
+    row["session_duration_s"] = round(
+        max(0.0, max(e.timestamp for e in events) - first.timestamp), 4
+    )
     row["mean_delay_s"]       = round(sum(delays) / len(delays), 4) if delays else 0.0
     row["max_delay_s"]        = round(max(delays), 4) if delays else 0.0
     row["min_delay_s"]        = round(min(d for d in delays if d > 0), 4) \

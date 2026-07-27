@@ -48,8 +48,19 @@ SEVERITY_MAP: Dict[str, str] = {
     "normal":                   "none",
 }
 
-# ── Delay profiles (mean, std) in seconds ─────────────────────────────────────
-DELAY_PROFILE_NORMAL: Dict[EventType, Tuple[float, float]] = {
+# ── Delay profile (mean, std) in seconds ──────────────────────────────────────
+# SINGLE, label-independent timing profile for every session.
+#
+# Per-event protocol delays (pairing/ECDH cost, challenge-response, auth, MQTT
+# session open, …) are network/compute costs of the *legitimate* protocol steps
+# and have no physical reason to differ between benign and malicious sessions.
+# The previous design used a separate, uniformly-faster DELAY_PROFILE_ATTACK,
+# which made every attack's delays / step-latencies near-zero by construction —
+# turning mean_delay_s, min/max_delay_s and every sX_latency_ms into a perfect
+# label shortcut (ROC-AUC 0.90-0.96). Genuine timing anomalies are still carried
+# by the honest signal columns (token_age_at_replay, nonce_age_at_reuse,
+# timestamp_delta_s), not by systematically shrinking the whole session's delays.
+DELAY_PROFILE: Dict[EventType, Tuple[float, float]] = {
     EventType.DISCOVERY:              (0.0,  0.0),
     EventType.GATEWAY_ADVERTISEMENT:  (0.12, 0.04),
     EventType.PAIRING_REQUEST:        (0.10, 0.03),
@@ -77,36 +88,6 @@ DELAY_PROFILE_NORMAL: Dict[EventType, Tuple[float, float]] = {
     EventType.RETRY:                  (1.0,  0.5),
     EventType.TIMEOUT:                (30.0, 5.0),
     EventType.DISCONNECT:             (5.0,  2.0),
-}
-
-DELAY_PROFILE_ATTACK: Dict[EventType, Tuple[float, float]] = {
-    EventType.DISCOVERY:              (0.0,  0.0),
-    EventType.GATEWAY_ADVERTISEMENT:  (0.05, 0.02),
-    EventType.PAIRING_REQUEST:        (0.04, 0.01),
-    EventType.PAIRING_RESPONSE:       (0.06, 0.02),
-    EventType.ENROLLMENT_REQUEST:     (0.05, 0.02),
-    EventType.ENROLLMENT_CONFIRMED:   (0.06, 0.02),
-    EventType.REGISTRATION_REQUEST:   (0.0,  0.0),
-    EventType.REGISTRATION_CONFIRMED: (0.04, 0.01),
-    EventType.AUTHENTICATION_REQUEST: (0.05, 0.02),
-    EventType.CHALLENGE_SENT:         (0.03, 0.01),
-    EventType.NONCE_RECEIVED:         (0.02, 0.005),
-    EventType.RESPONSE_SENT:          (0.03, 0.01),
-    EventType.AUTHENTICATION_SUCCESS: (0.03, 0.01),
-    EventType.AUTHENTICATION_FAILURE: (0.03, 0.01),
-    EventType.TOKEN_ISSUED:           (0.03, 0.01),
-    EventType.TOKEN_PRESENTED:        (0.02, 0.005),
-    EventType.TOKEN_VALIDATED:        (0.02, 0.005),
-    EventType.SESSION_OPENED:         (0.02, 0.005),
-    EventType.ACCESS_REQUEST:         (0.1,  0.05),
-    EventType.ACCESS_GRANTED:         (0.02, 0.005),
-    EventType.ACCESS_DENIED:          (0.02, 0.005),
-    EventType.SESSION_CLOSED:         (1.0,  0.5),
-    EventType.RENEWAL_REQUEST:        (5.0,  2.0),
-    EventType.TOKEN_EXPIRED:          (300.0, 10.0),
-    EventType.RETRY:                  (0.2,  0.1),
-    EventType.TIMEOUT:                (30.0, 5.0),
-    EventType.DISCONNECT:             (1.0,  0.5),
 }
 
 TOKEN_CARRYING_EVENTS = {
@@ -471,7 +452,7 @@ class EventEngine:
         events:    List[AuthEvent] = []
         session_id = str(uuid.uuid4())
         is_attack  = spec.is_anomaly
-        profile    = DELAY_PROFILE_ATTACK if is_attack else DELAY_PROFILE_NORMAL
+        profile    = DELAY_PROFILE   # single, label-independent timing for every session
 
         # ── Session-level MQTT / token context (one value per session) ─────────
         topic:        str = f"iot/{self.device_id[:8]}/telemetry"
@@ -539,6 +520,11 @@ class EventEngine:
         if spec.is_anomaly:
             delay          = self._sample_delay(spec.injection_event, profile)
             rs["current_ts"] += delay
+            # Timestamp the injected event off the (monotonic) session clock.
+            # timestamp_inconsistency rewinds ONLY this event's declared time
+            # (below); the server-side clock keeps advancing so any continuation
+            # and the session-duration span stay physically consistent.
+            injected_ts = rs["current_ts"]
 
             # ── Phase 4: per-variant enrichment before state machine step ────────
 
@@ -557,10 +543,14 @@ class EventEngine:
             if spec.anomaly_type == "nonce_reuse" and rs["nonce"] is not None:
                 ctx["nonce_age_at_reuse"] = round(te.nonce_age(rs["current_ts"]), 2)
 
-            # timestamp_inconsistency: record the backward-jump magnitude before applying
+            # timestamp_inconsistency: the device declares a time in the past on
+            # this event only. Rewind injected_ts (the event's stamped time), NOT
+            # the running session clock — otherwise the whole session's duration
+            # goes negative, which by itself perfectly flags the attack. The
+            # backward-jump magnitude is the honest signal (timestamp_delta_s).
             if spec.anomaly_type == "timestamp_inconsistency":
                 delta            = random.uniform(400, 900)
-                rs["current_ts"] = rs["current_ts"] - delta
+                injected_ts      = rs["current_ts"] - delta
                 ctx["timestamp_delta_s"] = round(delta, 2)
 
             # duplicate_sequence: a complete auth sequence replayed inside open session
@@ -623,7 +613,7 @@ class EventEngine:
                 new_state=new_state, result=EventResult.FAILURE,
                 failure_reason=f"invalid_transition_{spec.anomaly_type}",
                 session_id=session_id, scenario_id=spec.scenario_id,
-                timestamp=rs["current_ts"], delay=delay, retry_count=rs["retry_count"],
+                timestamp=injected_ts, delay=delay, retry_count=rs["retry_count"],
                 token_id=inj_token_id,
                 token_expiry=rs["token_expiry"] if inj_token_id else None,
                 token_scope=token_scope if inj_token_id else None,
@@ -798,23 +788,31 @@ class EventEngine:
         pkt_rate, msg_rate   = _sample_traffic_rate(is_rate_based)
 
         # ── Network features ──────────────────────────────────────────────────
-        if is_attack:
-            tcp_rtt    = max(1.0, random.gauss(8.0,  30.0))
-        else:
-            tcp_rtt    = max(1.0, random.gauss(20.0, 5.0))
+        # tcp_rtt is a property of the network path, not of the attacker's intent,
+        # so it is drawn from one shared distribution for both classes. (Keying it
+        # on is_attack previously made it a mild leak.)
+        tcp_rtt = max(1.0, random.gauss(20.0, 8.0))
 
         inter_arrival = round(1000.0 / pkt_rate, 2)
         frame_len     = random.randint(64, 256)
         seg_len       = random.randint(128, 512)
-        conn_duration = round((events[-1].timestamp - events[0].timestamp) * 1000, 2)
+        # Session span from the monotonic clock: latest stamped time minus the
+        # first event. Using max() (not events[-1]) and clamping at 0 keeps the
+        # duration correct even when a timestamp_inconsistency event carries a
+        # backward-dated stamp in the middle of the sequence.
+        session_span  = max(0.0, max(e.timestamp for e in events) - events[0].timestamp)
+        conn_duration = round(session_span * 1000, 2)
 
         # ── MQTT features ─────────────────────────────────────────────────────
         qos_level    = random.choice([0, 1, 2])
         topic        = f"iot/{self.device_id[:8]}/telemetry"
-        payload_size = (
-            random.randint(512, 8192) if is_attack
-            else random.randint(10, 512)
-        )
+        # Payload size is drawn from one shared distribution regardless of the
+        # label. Keying it on is_attack (10-512 vs 512-8192) made byte_rate
+        # (= message_rate * payload_size) a perfect discriminator (AUC 0.96).
+        # Genuinely high-volume attacks still stand out through their elevated
+        # message_rate (see RATE_BASED_ATTACKS / _sample_traffic_rate); a replay
+        # or impersonation has no reason to carry a 16x larger payload.
+        payload_size = random.randint(10, 512)
         payload_sample = bytes(random.randint(0, 255) for _ in range(min(payload_size, 64)))
         payload_hash   = hashlib.blake2s(payload_sample).hexdigest()
 
@@ -850,7 +848,7 @@ class EventEngine:
 
         operation = "publish" if mqtt_msg_type == "PUBLISH" else "pub_sub"
 
-        session_dur = max(0.0, events[-1].timestamp - events[0].timestamp)
+        session_dur = session_span
 
         # ── Trust score — continuous zero-trust score from observed signals ─────
         renewals = te.renewal_count if te else 0
