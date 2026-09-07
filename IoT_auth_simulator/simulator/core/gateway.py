@@ -73,7 +73,7 @@ class Gateway:
     """
 
     gateway_id: str
-    ip_address: str = field(default_factory=lambda: cfg.network.gateway_ip)
+    ip_address: str = field(default_factory=lambda: f"{cfg.network.gateway_subnet}1")
 
     # ── TLS: the gateway terminates the device-facing TLS channel and
     #    re-establishes a separate one toward the cloud. ────────────────────────
@@ -106,6 +106,23 @@ class Gateway:
     # ══════════════════════════════════════════════════════════════════════════
     # Lifecycle
     # ══════════════════════════════════════════════════════════════════════════
+
+    @classmethod
+    def create(cls, gateway_id: str, index: int = 0) -> "Gateway":
+        """
+        Build a gateway whose address is derived from the gateway subnet,
+        the same way Device.create derives device IPs from the device subnet.
+
+        Parameters
+        ----------
+        gateway_id : identifier carried into the event log
+        index      : position in the gateway pool (drives the IP, wraps at 254)
+        """
+        octet = (index % 254) + 1
+        return cls(
+            gateway_id=gateway_id,
+            ip_address=f"{cfg.network.gateway_subnet}{octet}",
+        )
 
     def __post_init__(self) -> None:
         self._rotate_ecdh_keypair()

@@ -74,7 +74,7 @@ class NetworkConfig:
 
     # Simulated subnets
     device_subnet:  str = "10.0.1."      # device IPs: 10.0.1.{1..254}
-    gateway_ip:     str = "192.168.1.1"
+    gateway_subnet: str = "192.168.1."   # gateway IPs: 192.168.1.{1..254}
     auth_server_ip: str = "10.10.0.10"
     broker_ip:      str = "10.10.0.20"
 

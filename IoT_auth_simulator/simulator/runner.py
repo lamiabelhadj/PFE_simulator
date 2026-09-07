@@ -56,7 +56,8 @@ def run_simulation(
         entities = {
             "auth_server": AuthServer(server_id=auth_server_id),
             "broker":      MQTTBroker(broker_id=broker_id),
-            "gateways":    {gid: Gateway(gateway_id=gid) for gid in gateway_ids},
+            "gateways":    {gid: Gateway.create(gid, index=i)
+                            for i, gid in enumerate(gateway_ids)},
             "stats":       defaultdict(int),
         }
 
