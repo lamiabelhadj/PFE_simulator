@@ -21,6 +21,7 @@ from simulator.core.device import Device
 from simulator.engines.scenario_engine import ScenarioEngine
 from simulator.engines.event_engine import EventEngine, SessionContext
 from simulator.event_model import AuthEvent
+from simulator.security_context import PersistentDeviceContext
 
 
 def run_simulation(
@@ -40,6 +41,17 @@ def run_simulation(
 
     # Build device pool — each device has a stable IP, PSK, and trust score.
     devices = [Device.create(index=i) for i in range(cfg.simulation.num_devices)]
+    # One persistent security context per device, shared across every generated
+    # trace selected for that device.  Protected-session termination never
+    # replaces these objects or their enrollment/bootstrap facts.
+    persistent_contexts = {
+        device.device_id: PersistentDeviceContext(
+            device_id=device.device_id,
+            bootstrap_credential_reference=device.get_psk_hash(),
+            device_profile_id=device.device_type,
+        )
+        for device in devices
+    }
 
     # Shared gateway / server / broker identifiers (round-robin by index).
     gateway_ids = [str(uuid.uuid4())[:8] for _ in range(cfg.simulation.num_gateways)]
@@ -95,6 +107,7 @@ def run_simulation(
             battery_level    = device.battery_level,
             firmware_version = device.firmware_version,
             driver           = driver,
+            persistent_context = persistent_contexts[device.device_id],
         )
         pair = engine.execute(spec)
         sequences.append(pair)

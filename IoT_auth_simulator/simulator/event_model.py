@@ -190,7 +190,8 @@ class AuthEvent:
 
     Anomaly relevance map
     ─────────────────────
-    token_id + session_id + device_id   → identity / token / session consistency
+    token_id + protected_session_id + device_id → identity/token/session consistency
+    trace_id + auth_attempt_id          → trace and authentication-attempt linkage
     nonce                               → nonce reuse detection
     timestamp + delay_since_previous    → replay window, timestamp inconsistency
     result + failure_reason + retry_count → abnormal failure rate
@@ -214,7 +215,13 @@ class AuthEvent:
     event_id:    str   = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp:   float = field(default_factory=time.time)
     scenario_id: str   = field(default="")
+    # Historical trace-grouping identifier retained for compatibility.  It is
+    # not the device lifetime, scenario, authentication attempt, or protected
+    # session identifier.  New code should use the explicit fields below.
     session_id:  str   = field(default="")
+    trace_id:             str           = field(default="")
+    auth_attempt_id:      Optional[str] = field(default=None)
+    protected_session_id: Optional[str] = field(default=None)
 
     # ── Identity & token ──────────────────────────────────────────────────────
     token_id:       Optional[str] = field(default=None)
@@ -271,6 +278,9 @@ class AuthEvent:
             "timestamp":                  round(self.timestamp, 6),
             "scenario_id":                self.scenario_id,
             "session_id":                 self.session_id,
+            "trace_id":                   self.trace_id,
+            "auth_attempt_id":            self.auth_attempt_id,
+            "protected_session_id":       self.protected_session_id,
             # Entities
             "device_id":                  self.device_id,
             "gateway_id":                 self.gateway_id,

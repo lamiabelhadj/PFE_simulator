@@ -169,6 +169,45 @@ SCENARIO_MECHANISM_MAPPINGS: Mapping[str, MappingEntry] = {
 }
 
 
+# Identifier roles introduced or clarified by C1.2.  ``session_id`` remains in
+# historical outputs for compatibility and is explicitly prevented from
+# defining any of the new semantic scopes.
+IDENTIFIER_SEMANTICS = {
+    "device_id": {
+        "scope": "persistent device identity",
+        "status": "mapped",
+    },
+    "trace_id": {
+        "scope": "generated experimental trace/episode",
+        "status": "mapped",
+    },
+    "scenario_id": {
+        "scope": "scenario specification instance",
+        "status": "mapped",
+    },
+    "auth_attempt_id": {
+        "scope": "one authentication or re-authentication attempt",
+        "status": "mapped",
+    },
+    "protected_session_id": {
+        "scope": "one protected/operational session",
+        "status": "mapped",
+    },
+    "session_id": {
+        "scope": "historical per-trace grouping identifier",
+        "status": "legacy alias",
+        "must_not_define": [
+            "device lifetime",
+            "enrollment lifetime",
+            "authentication attempt",
+            "scenario identity",
+            "trace identity",
+            "protected-session identity",
+        ],
+    },
+}
+
+
 IMPLEMENTATION_FACTS = {
     "audit_baseline": "27135bf",
     "working_base": "54175c1",
@@ -221,6 +260,7 @@ def semantic_mapping_report() -> dict:
         "device_states": _serialized(DEVICE_STATE_MAPPINGS),
         "anomaly_names": _serialized(ANOMALY_NAME_MAPPINGS),
         "scenario_mechanisms": _serialized(SCENARIO_MECHANISM_MAPPINGS),
+        "identifier_semantics": IDENTIFIER_SEMANTICS,
         "status_summary": {
             "event_types": _status_counts(EVENT_TYPE_MAPPINGS),
             "auth_states": _status_counts(AUTH_STATE_MAPPINGS),

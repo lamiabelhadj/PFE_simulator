@@ -16,7 +16,8 @@ Three session properties guaranteed
 ─────────────────────────────────────
   Temporal     — timestamps always increasing; delay_since_previous stored on every event
   State        — previous_state / new_state taken directly from StateMachine
-  Consistency  — session_id, token_id, nonce propagated across all relevant events
+  Consistency  — device, trace, authentication-attempt, protected-session,
+                 token, and nonce relationships are carried explicitly
 """
 
 import hashlib
@@ -30,8 +31,12 @@ from typing import Dict, List, Optional, Tuple
 from simulator.config.settings import cfg
 from simulator.event_model import AuthEvent, AuthState, EventResult, EventType
 from simulator.state_machine import StateMachine, TransitionError
-from simulator.engines.scenario_engine import ScenarioSpec
+from simulator.engines.scenario_engine import REGISTRATION_PHASE, ScenarioSpec
 from simulator.engines.temporal_engine import TemporalEngine, TemporalConfig
+from simulator.security_context import (
+    AuthenticationSessionContext,
+    PersistentDeviceContext,
+)
 
 
 # ── Severity map ──────────────────────────────────────────────────────────────
@@ -326,8 +331,10 @@ def _compute_trust_score(ctx: Dict, renewals: int) -> float:
 @dataclass
 class SessionContext:
     """
-    Device-level, network-level, MQTT-level, re-auth, and step-latency
-    attributes generated alongside the AuthEvent sequence.
+    Historical one-row-per-trace feature context generated alongside the event
+    sequence.  Despite its legacy name, this object is not the protected
+    session security context; C1.2 identifiers below refer to that context
+    explicitly.
 
     Merged into the feature table by output_views.to_feature_df().
     
@@ -420,6 +427,18 @@ class SessionContext:
     unauthorized_access_attempt: int = 0  # access_without_auth: ACCESS_REQUEST before auth
     steps_before_access:        int = 0   # access_without_auth: auth steps completed before attempt
 
+    # ── C1.2 semantic identifiers and persistence references ────────────────
+    device_id:                  str = ""
+    trace_id:                   str = ""
+    scenario_id:                str = ""
+    legacy_session_id:          str = ""
+    protected_session_id:       Optional[str] = None
+    auth_attempt_ids:           Tuple[str, ...] = field(default_factory=tuple)
+    renewal_auth_attempt_ids:   Tuple[str, ...] = field(default_factory=tuple)
+    refreshes_protected_session_id: Optional[str] = None
+    persistent_enrolled:        bool = False
+    persistent_paired:          bool = False
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -454,6 +473,7 @@ class EventEngine:
         firmware_version: Optional[str]   = None,
         start_time:       Optional[float] = None,
         driver:           object          = None,
+        persistent_context: Optional[PersistentDeviceContext] = None,
     ):
         self.device_id        = device_id
         self.gateway_id       = gateway_id
@@ -469,6 +489,12 @@ class EventEngine:
             cfg.device.firmware_versions
         )
         self.start_time       = start_time or time.time()
+        self.persistent_context = persistent_context or PersistentDeviceContext(
+            device_id=device_id
+        )
+        if self.persistent_context.device_id != device_id:
+            raise ValueError("persistent context device_id must match EventEngine device_id")
+        self.last_authentication_context: Optional[AuthenticationSessionContext] = None
 
     # ══════════════════════════════════════════════════════════════════════════
     # Main entry point
@@ -484,9 +510,13 @@ class EventEngine:
           events  : correlated AuthEvent sequence
           context : SessionContext with all Phase 0 features
         """
-        sm         = StateMachine()
+        initial_state, normal_steps, injection_position = self._execution_plan(spec)
+        sm         = StateMachine(initial_state=initial_state)
         events:    List[AuthEvent] = []
-        session_id = str(uuid.uuid4())
+        # ``session_id`` is the historical per-trace grouping id.  Keep it for
+        # compatibility while assigning distinct semantic identifiers below.
+        legacy_session_id = str(uuid.uuid4())
+        trace_id          = str(uuid.uuid4())
         is_attack  = spec.is_anomaly
         profile    = DELAY_PROFILE   # single, label-independent timing for every session
 
@@ -499,16 +529,28 @@ class EventEngine:
         te = TemporalEngine(config=TemporalConfig(), is_attack=is_attack)
 
         # ── Mutable run-state threaded through every step (see _run_step) ──────
+        security_context = AuthenticationSessionContext(
+            device_id=self.device_id,
+            trace_id=trace_id,
+            scenario_id=spec.scenario_id,
+            legacy_session_id=legacy_session_id,
+            current_auth_state=initial_state,
+            current_timestamp=self.start_time,
+            token_scope=token_scope,
+            topic=topic,
+            resource_id=resource_id,
+        )
         rs: Dict = {
             "current_ts":   self.start_time,
             "token_id":     None,          # set once a token is issued
             "token_expiry": None,
             "nonce":        None,
             "retry_count":  0,
-            "session_id":   session_id,
+            "session_id":   legacy_session_id,
             "topic":        topic,
             "resource_id":  resource_id,
             "token_scope":  token_scope,
+            "security_context": security_context,
         }
 
         # ── Accumulators for SessionContext ───────────────────────────────────
@@ -561,8 +603,8 @@ class EventEngine:
         # Detected attacks run up to the injection point (then inject below);
         # normal sessions and stealth attacks run the full flow.
         steps_to_run = (
-            spec.normal_steps[:spec.injection_position]
-            if (spec.is_anomaly and not stealth) else spec.normal_steps
+            normal_steps[:injection_position]
+            if (spec.is_anomaly and not stealth) else normal_steps
         )
 
         for event_type in steps_to_run:
@@ -613,6 +655,7 @@ class EventEngine:
                 new_state = sm.state
             except TransitionError:
                 new_state = spec.injection_from_state
+            security_context.current_auth_state = new_state
 
             identity_claim = None
 
@@ -650,7 +693,10 @@ class EventEngine:
                 event_type=spec.injection_event, prev_state=spec.injection_from_state,
                 new_state=new_state, result=EventResult.FAILURE,
                 failure_reason=f"invalid_transition_{spec.anomaly_type}",
-                session_id=session_id, scenario_id=spec.scenario_id,
+                session_id=legacy_session_id, scenario_id=spec.scenario_id,
+                trace_id=security_context.trace_id,
+                auth_attempt_id=security_context.current_auth_attempt_id,
+                protected_session_id=security_context.protected_session_id,
                 timestamp=injected_ts, delay=delay, retry_count=rs["retry_count"],
                 token_id=inj_token_id,
                 token_expiry=rs["token_expiry"] if inj_token_id else None,
@@ -662,14 +708,19 @@ class EventEngine:
                 identity_claim=identity_claim,
             )
             events.append(ev)
+            security_context.record_result(
+                EventResult.FAILURE,
+                f"invalid_transition_{spec.anomaly_type}",
+            )
 
             # ── Continuation: resume the legitimate flow for a fraction of the
             # in-session replay/renewal anomalies so they still reach SESSION_OPENED
             # / ACCESS_GRANTED / SESSION_CLOSED and overlap normal sessions. ──────
             resume = random.random() < CONTINUE_AFTER_INJECTION.get(spec.anomaly_type, 0.0)
-            if spec.injection_position < len(spec.normal_steps) and resume:
+            if injection_position < len(normal_steps) and resume:
                 sm.force(pre_injection_state)
-                for event_type in spec.normal_steps[spec.injection_position:]:
+                security_context.current_auth_state = pre_injection_state
+                for event_type in normal_steps[injection_position:]:
                     self._run_step(event_type, sm, rs, ctx, te, events, profile, spec)
 
         # ── False positives: a fraction of benign sessions exhibit a suspicious-
@@ -692,7 +743,10 @@ class EventEngine:
         ctx["auth_result"] = ctx["final_auth_result"]
 
         # ── Build SessionContext ───────────────────────────────────────────────
-        context = self._build_context(spec, events, ctx, te)
+        context = self._build_context(
+            spec, events, ctx, te, security_context, self.persistent_context
+        )
+        self.last_authentication_context = security_context
         return events, context
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -718,12 +772,23 @@ class EventEngine:
         continuation, so every completed session — normal or anomalous — goes
         through exactly the same event-construction path.
         """
+        security_context: AuthenticationSessionContext = rs["security_context"]
+
+        # Establish identifier scope before emitting the event that starts it.
+        if event_type == EventType.AUTHENTICATION_REQUEST:
+            security_context.start_auth_attempt()
+        elif event_type == EventType.RENEWAL_REQUEST:
+            security_context.start_auth_attempt(renewal=True)
+        elif event_type == EventType.SESSION_OPENED:
+            security_context.open_protected_session()
+
         # Phase 3: use retry backoff delay for RETRY events
         if event_type == EventType.RETRY:
             delay = te.next_retry_delay()
         else:
             delay = self._sample_delay(event_type, profile)
         rs["current_ts"] += delay
+        security_context.current_timestamp = rs["current_ts"]
         prev_state = sm.state
         result, failure_reason = self._outcome(event_type, is_anomaly=False)
 
@@ -733,22 +798,28 @@ class EventEngine:
             new_state      = prev_state
             result         = EventResult.FAILURE
             failure_reason = "unexpected_transition_error"
+        security_context.current_auth_state = new_state
 
         # ── Update shared token/nonce context ─────────────────────────────────
         if event_type == EventType.TOKEN_ISSUED:
             rs["token_id"]     = str(uuid.uuid4())
             rs["token_expiry"] = rs["current_ts"] + cfg.security.token_lifetime_s
+            security_context.token_id = rs["token_id"]
+            security_context.token_expiry = rs["token_expiry"]
             te.record_token_issued(rs["current_ts"])         # Phase 3
         if event_type == EventType.RENEWAL_REQUEST:
             # Renewal extends the token's lifetime from the renewal moment.
             rs["token_expiry"] = rs["current_ts"] + cfg.security.token_lifetime_s
+            security_context.token_expiry = rs["token_expiry"]
         if event_type == EventType.TOKEN_PRESENTED:
             te.record_token_presented(rs["current_ts"])      # Phase 3
         if event_type == EventType.CHALLENGE_SENT:
             rs["nonce"] = hashlib.blake2s(uuid.uuid4().bytes).hexdigest()[:16]
+            security_context.current_challenge_nonce = rs["nonce"]
             te.record_nonce_issued(rs["current_ts"])         # Phase 3
         if event_type in {EventType.AUTHENTICATION_FAILURE, EventType.TOKEN_REJECTED}:
             rs["retry_count"]        += 1
+            security_context.retry_count = rs["retry_count"]
             ctx["failed_auth_count"] += 1
             te.record_failure()                              # Phase 3
         if event_type == EventType.RETRY:
@@ -762,6 +833,8 @@ class EventEngine:
             overrides = self.driver.on_event(event_type, rs, rs["current_ts"])
             if overrides:
                 rs.update(overrides)
+                if "token_id" in overrides:
+                    security_context.token_id = overrides["token_id"]
 
         # ── Capture step latencies (mapped to the six lifecycle phases) ───────
         delay_ms = delay * 1000
@@ -808,6 +881,9 @@ class EventEngine:
             new_state=new_state, result=result,
             failure_reason=failure_reason, session_id=rs["session_id"],
             scenario_id=spec.scenario_id, timestamp=rs["current_ts"],
+            trace_id=security_context.trace_id,
+            auth_attempt_id=security_context.current_auth_attempt_id,
+            protected_session_id=security_context.protected_session_id,
             delay=delay, retry_count=rs["retry_count"],
             token_id=ev_token_id,
             token_expiry=rs["token_expiry"] if ev_token_id else None,
@@ -819,6 +895,30 @@ class EventEngine:
         )
         events.append(ev)
 
+        security_context.record_result(result, failure_reason)
+        if result == EventResult.SUCCESS:
+            self.persistent_context.record_successful_event(event_type, new_state)
+
+        # Retry starts a distinct subsequent authentication attempt.  The RETRY
+        # event itself remains associated with the attempt being retried.
+        if event_type == EventType.RETRY and prev_state in {
+            AuthState.AUTH_FAILED,
+            AuthState.TOKEN_EXPIRED,
+        }:
+            security_context.start_auth_attempt()
+        elif event_type in {
+            EventType.AUTHENTICATION_SUCCESS,
+            EventType.AUTHENTICATION_FAILURE,
+        }:
+            security_context.finish_auth_attempt()
+
+        if event_type in {
+            EventType.SESSION_CLOSED,
+            EventType.DISCONNECT,
+            EventType.TIMEOUT,
+        }:
+            security_context.terminate_session()
+
     # ══════════════════════════════════════════════════════════════════════════
     # SessionContext builder
     # ══════════════════════════════════════════════════════════════════════════
@@ -829,6 +929,8 @@ class EventEngine:
         events: List[AuthEvent],
         ctx:    Dict,
         te:     Optional["TemporalEngine"] = None,
+        security_context: Optional[AuthenticationSessionContext] = None,
+        persistent_context: Optional[PersistentDeviceContext] = None,
     ) -> SessionContext:
         is_attack   = spec.is_anomaly
         # Phase 3 fix: use the actual anomaly label, not a generic "attack" string
@@ -1012,11 +1114,70 @@ class EventEngine:
             token_device_mismatch       = ctx.get("token_device_mismatch",       0),
             unauthorized_access_attempt = ctx.get("unauthorized_access_attempt", 0),
             steps_before_access         = ctx.get("steps_before_access",         0),
+            # C1.2 identifiers / persistence scope
+            device_id                   = self.device_id,
+            trace_id                    = security_context.trace_id if security_context else "",
+            scenario_id                 = spec.scenario_id,
+            legacy_session_id           = security_context.legacy_session_id if security_context else "",
+            protected_session_id        = security_context.protected_session_id if security_context else None,
+            auth_attempt_ids             = tuple(security_context.auth_attempt_ids) if security_context else (),
+            renewal_auth_attempt_ids     = tuple(security_context.renewal_auth_attempt_ids) if security_context else (),
+            refreshes_protected_session_id = (
+                security_context.refreshes_protected_session_id
+                if security_context else None
+            ),
+            persistent_enrolled         = persistent_context.enrolled if persistent_context else False,
+            persistent_paired           = persistent_context.paired if persistent_context else False,
         )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Internal helpers
     # ══════════════════════════════════════════════════════════════════════════
+
+    def _execution_plan(
+        self,
+        spec: ScenarioSpec,
+    ) -> Tuple[AuthState, List[EventType], Optional[int]]:
+        """Resume a trace from retained onboarding facts where safely possible.
+
+        Full historical flows all begin with ``REGISTRATION_PHASE``.  Only the
+        already-established prefix is omitted.  Very short legacy partial flows
+        are preserved if omission would make the trace empty; this compatibility
+        case does not reset or overwrite the persistent context.
+        """
+        steps = list(spec.normal_steps)
+        retained_state = self.persistent_context.legacy_auth_state()
+
+        # Revocation/blocking cannot be erased by adapting a historical flow
+        # that happens to begin with discovery.
+        if self.persistent_context.revoked or self.persistent_context.blocked:
+            return retained_state, steps, spec.injection_position
+
+        if self.persistent_context.enrolled:
+            skip = len(REGISTRATION_PHASE)
+        elif self.persistent_context.paired:
+            skip = 4
+        elif self.persistent_context.discovered:
+            skip = 2
+        else:
+            skip = 0
+
+        prefix_matches = skip > 0 and steps[:skip] == list(REGISTRATION_PHASE[:skip])
+        if prefix_matches and len(steps) > skip:
+            steps = steps[skip:]
+            injection_position = (
+                max(0, spec.injection_position - skip)
+                if spec.injection_position is not None else None
+            )
+            return retained_state, steps, injection_position
+
+        # A caller may supply an authentication-only flow explicitly.
+        if steps and steps[0] not in REGISTRATION_PHASE:
+            return retained_state, steps, spec.injection_position
+
+        # Historical onboarding-only partial traces remain executable rather
+        # than becoming empty; persistent facts still live outside this FSM.
+        return AuthState.UNREGISTERED, steps, spec.injection_position
 
     def _make_event(
         self,
@@ -1027,6 +1188,9 @@ class EventEngine:
         failure_reason: Optional[str],
         session_id:     str,
         scenario_id:    str,
+        trace_id:       str,
+        auth_attempt_id: Optional[str],
+        protected_session_id: Optional[str],
         timestamp:      float,
         delay:          float,
         retry_count:    int,
@@ -1051,6 +1215,9 @@ class EventEngine:
             failure_reason             = failure_reason,
             session_id                 = session_id,
             scenario_id                = scenario_id,
+            trace_id                   = trace_id,
+            auth_attempt_id            = auth_attempt_id,
+            protected_session_id       = protected_session_id,
             timestamp                  = timestamp,
             delay_since_previous_event = delay,
             token_id                   = token_id,

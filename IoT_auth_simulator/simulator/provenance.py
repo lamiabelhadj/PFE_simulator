@@ -3,8 +3,8 @@
 This module deliberately does not alter any dataset schema or generator path.
 It provides an implementation-level provenance record that later C1 tasks can
 attach to generated artifacts.  The identifiers describe the current
-development and historical schemas; they do not claim a canonical dataset
-release or completed Behavioral-model-v1 synchronization.
+development schemas; they do not claim a canonical dataset release or
+completed Behavioral-model-v1 synchronization.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from typing import Any, Mapping, Optional
 
 BEHAVIOR_MODEL_VERSION = "behavioral-model-v1"
 GENERATOR_SOFTWARE_VERSION = "c1-sync-development"
-EVENT_SCHEMA_VERSION = "historical-event-schema-27135bf"
-FEATURE_SCHEMA_VERSION = "historical-feature-schema-27135bf"
+EVENT_SCHEMA_VERSION = "c1.2-development-event-schema"
+FEATURE_SCHEMA_VERSION = "c1.2-development-feature-schema"
 CONFIGURATION_VERSION = "historical-defaults-27135bf"
 
 

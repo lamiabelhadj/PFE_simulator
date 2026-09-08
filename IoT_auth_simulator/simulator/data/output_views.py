@@ -60,6 +60,16 @@ def to_json_log(sequences: SequenceInput) -> str:
         scenario_type = next(iter(anomaly_lbls), "normal")
         entry: Dict = {
             "scenario_id":   first.scenario_id,
+            "trace_id":      first.trace_id,
+            "legacy_session_id": first.session_id,
+            "protected_session_id": (
+                getattr(ctx, "protected_session_id", None)
+                if ctx else next(
+                    (event.protected_session_id for event in events
+                     if event.protected_session_id),
+                    None,
+                )
+            ),
             "scenario_type": scenario_type,
             "event_count":   len(events),
             "events":        [e.to_dict() for e in events],
@@ -117,7 +127,8 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
     ordered = [
         "event_id", "event_type", "timestamp",
         "delay_since_previous_event",
-        "scenario_id", "session_id",
+        "scenario_id", "trace_id", "session_id",
+        "auth_attempt_id", "protected_session_id",
         "device_id", "gateway_id", "auth_server_id", "broker_id",
         "previous_state", "new_state",
         "result", "failure_reason", "retry_count",
@@ -170,7 +181,20 @@ def _build_row(
 
     # ── Phase 2: identifiers ──────────────────────────────────────────────────
     row["scenario_id"] = first.scenario_id
+    row["trace_id"]    = first.trace_id
+    # Historical trace-grouping field retained as a compatibility identifier.
     row["session_id"]  = first.session_id
+    row["protected_session_id"] = (
+        getattr(ctx, "protected_session_id", None)
+        if ctx else next(
+            (event.protected_session_id for event in events
+             if event.protected_session_id),
+            None,
+        )
+    )
+    row["auth_attempt_count"] = len({
+        event.auth_attempt_id for event in events if event.auth_attempt_id
+    })
     row["device_id"]   = first.device_id
     row["gateway_id"]  = first.gateway_id
 
