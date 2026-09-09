@@ -35,7 +35,12 @@ from simulator.engines.scenario_engine import REGISTRATION_PHASE, ScenarioSpec
 from simulator.engines.temporal_engine import TemporalEngine, TemporalConfig
 from simulator.security_context import (
     AuthenticationSessionContext,
+    AuthenticationResult,
+    AuthorizationDecision,
     PersistentDeviceContext,
+    ReferenceAuthorizationPolicy,
+    ResourceOperationOutcome,
+    TokenValidationResult,
 )
 
 
@@ -138,6 +143,34 @@ RELIABLE_EVENTS = {
     EventType.ENROLLMENT_CONFIRMED,
     EventType.REGISTRATION_REQUEST,
     EventType.REGISTRATION_CONFIRMED,
+    # Explicit semantic outcomes must not be renamed into contradictions by a
+    # random transient failure. Benign failure paths use their explicit events.
+    EventType.AUTHENTICATION_SUCCESS,
+    EventType.TOKEN_ISSUED,
+    EventType.TOKEN_PRESENTED,
+    EventType.TOKEN_VALIDATED,
+    EventType.SESSION_OPENED,
+    EventType.ACCESS_GRANTED,
+    EventType.SESSION_CLOSED,
+    EventType.TIMEOUT,
+    EventType.DISCONNECT,
+}
+
+# These events communicate a negative semantic outcome while legitimately
+# advancing the legacy FSM into the corresponding failure/denial context.
+NEGATIVE_OUTCOME_TRANSITIONS = {
+    EventType.AUTHENTICATION_FAILURE,
+    EventType.TOKEN_REJECTED,
+    EventType.ACCESS_DENIED,
+}
+
+AUTHENTICATION_INTERACTION_EVENTS = {
+    EventType.AUTHENTICATION_REQUEST,
+    EventType.CHALLENGE_SENT,
+    EventType.NONCE_RECEIVED,
+    EventType.RESPONSE_SENT,
+    EventType.AUTHENTICATION_SUCCESS,
+    EventType.AUTHENTICATION_FAILURE,
 }
 
 # ── Anomaly session continuation policy ───────────────────────────────────────
@@ -438,6 +471,19 @@ class SessionContext:
     refreshes_protected_session_id: Optional[str] = None
     persistent_enrolled:        bool = False
     persistent_paired:          bool = False
+    authentication_result_semantic: str = AuthenticationResult.NOT_EVALUATED.value
+    last_authentication_attempt_result: str = AuthenticationResult.NOT_EVALUATED.value
+    authenticated_identity:     Optional[str] = None
+    authenticated_context_active: bool = False
+    token_validation_result:    str = TokenValidationResult.NOT_EVALUATED.value
+    token_context_active:       bool = False
+    protected_session_active:   bool = False
+    requested_action:           Optional[str] = None
+    authorization_decision:     str = AuthorizationDecision.NOT_EVALUATED.value
+    resource_operation_outcome: str = ResourceOperationOutcome.NOT_EXECUTED.value
+    access_request_ids:         Tuple[str, ...] = field(default_factory=tuple)
+    authorization_decisions:    Tuple[str, ...] = field(default_factory=tuple)
+    resource_operation_outcomes: Tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -521,9 +567,11 @@ class EventEngine:
         profile    = DELAY_PROFILE   # single, label-independent timing for every session
 
         # ── Session-level MQTT / token context (one value per session) ─────────
-        topic:        str = f"iot/{self.device_id[:8]}/telemetry"
-        resource_id:  str = f"resource://{self.device_id[:8]}/telemetry"
         token_scope:  str = random.choice(TOKEN_SCOPES)
+        scope_resource, scope_permission = token_scope.split(":", 1)
+        requested_action = "write" if scope_permission == "readwrite" else scope_permission
+        topic:        str = f"iot/{self.device_id[:8]}/{scope_resource}"
+        resource_id:  str = f"resource://{self.device_id[:8]}/{scope_resource}"
 
         # Phase 3 — temporal tracker for this session
         te = TemporalEngine(config=TemporalConfig(), is_attack=is_attack)
@@ -539,6 +587,7 @@ class EventEngine:
             token_scope=token_scope,
             topic=topic,
             resource_id=resource_id,
+            requested_action=requested_action,
         )
         rs: Dict = {
             "current_ts":   self.start_time,
@@ -689,14 +738,15 @@ class EventEngine:
             )
             inj_token_id = rs["token_id"] if spec.injection_event in TOKEN_CARRYING_EVENTS else None
 
+            if spec.injection_event == EventType.ACCESS_REQUEST:
+                security_context.start_access_request()
+
             ev = self._make_event(
                 event_type=spec.injection_event, prev_state=spec.injection_from_state,
                 new_state=new_state, result=EventResult.FAILURE,
                 failure_reason=f"invalid_transition_{spec.anomaly_type}",
                 session_id=legacy_session_id, scenario_id=spec.scenario_id,
-                trace_id=security_context.trace_id,
-                auth_attempt_id=security_context.current_auth_attempt_id,
-                protected_session_id=security_context.protected_session_id,
+                security_context=security_context,
                 timestamp=injected_ts, delay=delay, retry_count=rs["retry_count"],
                 token_id=inj_token_id,
                 token_expiry=rs["token_expiry"] if inj_token_id else None,
@@ -773,14 +823,22 @@ class EventEngine:
         through exactly the same event-construction path.
         """
         security_context: AuthenticationSessionContext = rs["security_context"]
+        prev_state = sm.state
 
         # Establish identifier scope before emitting the event that starts it.
         if event_type == EventType.AUTHENTICATION_REQUEST:
             security_context.start_auth_attempt()
         elif event_type == EventType.RENEWAL_REQUEST:
             security_context.start_auth_attempt(renewal=True)
-        elif event_type == EventType.SESSION_OPENED:
-            security_context.open_protected_session()
+        elif event_type == EventType.RETRY and prev_state in {
+            AuthState.AUTH_FAILED,
+            AuthState.TOKEN_EXPIRED,
+        }:
+            security_context.start_auth_attempt()
+        elif event_type == EventType.ACCESS_REQUEST or (
+            event_type == EventType.RETRY and prev_state == AuthState.ACCESS_DENIED
+        ):
+            security_context.start_access_request()
 
         # Phase 3: use retry backoff delay for RETRY events
         if event_type == EventType.RETRY:
@@ -789,35 +847,88 @@ class EventEngine:
             delay = self._sample_delay(event_type, profile)
         rs["current_ts"] += delay
         security_context.current_timestamp = rs["current_ts"]
-        prev_state = sm.state
         result, failure_reason = self._outcome(event_type, is_anomaly=False)
 
-        try:
-            new_state = sm.advance(event_type)
-        except TransitionError:
-            new_state      = prev_state
-            result         = EventResult.FAILURE
-            failure_reason = "unexpected_transition_error"
+        # Success-dependent operations require evidence in the explicit
+        # security context, not merely a reachable legacy FSM state.
+        if event_type == EventType.TOKEN_ISSUED and (
+            security_context.authentication_result is not AuthenticationResult.SUCCESS
+        ):
+            result, failure_reason = EventResult.FAILURE, "authentication_not_established"
+        elif event_type == EventType.TOKEN_PRESENTED and not security_context.token_issued:
+            result, failure_reason = EventResult.FAILURE, "token_not_issued"
+        elif event_type == EventType.TOKEN_VALIDATED and not security_context.token_presented:
+            result, failure_reason = EventResult.FAILURE, "token_not_presented"
+        elif event_type == EventType.SESSION_OPENED and (
+            not security_context.authenticated_context_active
+            or security_context.token_validation_result is not TokenValidationResult.VALIDATED
+            or not security_context.token_context_active
+        ):
+            result, failure_reason = EventResult.FAILURE, "session_security_context_incomplete"
+
+        authorization_evaluation = None
+        if event_type == EventType.ACCESS_GRANTED:
+            request = security_context.current_access_request
+            if request is None:
+                result, failure_reason = EventResult.FAILURE, "missing_access_request"
+            else:
+                authorization_evaluation = ReferenceAuthorizationPolicy.evaluate(
+                    security_context, request
+                )
+                if authorization_evaluation[0] is not AuthorizationDecision.GRANTED:
+                    result = EventResult.FAILURE
+                    failure_reason = authorization_evaluation[1]
+
+        transition_applied = False
+        if result == EventResult.FAILURE and event_type not in NEGATIVE_OUTCOME_TRANSITIONS:
+            new_state = prev_state
+        else:
+            try:
+                new_state = sm.advance(event_type)
+                transition_applied = True
+            except TransitionError:
+                new_state      = prev_state
+                result         = EventResult.FAILURE
+                failure_reason = "unexpected_transition_error"
         security_context.current_auth_state = new_state
+        operation_succeeded = transition_applied and result == EventResult.SUCCESS
 
         # ── Update shared token/nonce context ─────────────────────────────────
-        if event_type == EventType.TOKEN_ISSUED:
+        if event_type == EventType.TOKEN_ISSUED and operation_succeeded:
             rs["token_id"]     = str(uuid.uuid4())
             rs["token_expiry"] = rs["current_ts"] + cfg.security.token_lifetime_s
             security_context.token_id = rs["token_id"]
             security_context.token_expiry = rs["token_expiry"]
             te.record_token_issued(rs["current_ts"])         # Phase 3
-        if event_type == EventType.RENEWAL_REQUEST:
+            security_context.token_issued = True
+            security_context.token_presented = False
+            security_context.token_validation_result = TokenValidationResult.NOT_EVALUATED
+            security_context.token_context_active = False
+        if event_type == EventType.RENEWAL_REQUEST and operation_succeeded:
             # Renewal extends the token's lifetime from the renewal moment.
             rs["token_expiry"] = rs["current_ts"] + cfg.security.token_lifetime_s
             security_context.token_expiry = rs["token_expiry"]
-        if event_type == EventType.TOKEN_PRESENTED:
+        if event_type == EventType.TOKEN_PRESENTED and operation_succeeded:
+            security_context.token_presented = True
             te.record_token_presented(rs["current_ts"])      # Phase 3
-        if event_type == EventType.CHALLENGE_SENT:
+        if event_type == EventType.TOKEN_VALIDATED:
+            security_context.token_validation_result = (
+                TokenValidationResult.VALIDATED
+                if operation_succeeded else TokenValidationResult.REJECTED
+            )
+            security_context.token_context_active = operation_succeeded
+        elif event_type == EventType.TOKEN_REJECTED and transition_applied:
+            security_context.token_validation_result = TokenValidationResult.REJECTED
+            security_context.token_presented = False
+            security_context.token_context_active = False
+        if event_type == EventType.CHALLENGE_SENT and operation_succeeded:
             rs["nonce"] = hashlib.blake2s(uuid.uuid4().bytes).hexdigest()[:16]
             security_context.current_challenge_nonce = rs["nonce"]
             te.record_nonce_issued(rs["current_ts"])         # Phase 3
-        if event_type in {EventType.AUTHENTICATION_FAILURE, EventType.TOKEN_REJECTED}:
+        if event_type in {
+            EventType.AUTHENTICATION_FAILURE,
+            EventType.TOKEN_REJECTED,
+        } and transition_applied:
             rs["retry_count"]        += 1
             security_context.retry_count = rs["retry_count"]
             ctx["failed_auth_count"] += 1
@@ -825,11 +936,57 @@ class EventEngine:
         if event_type == EventType.RETRY:
             ctx["n_retries_fired"] += 1
 
+        if event_type == EventType.AUTHENTICATION_SUCCESS:
+            if operation_succeeded:
+                security_context.authentication_result = AuthenticationResult.SUCCESS
+                security_context.authenticated_identity = self.device_id
+                security_context.authenticated_context_active = True
+            else:
+                security_context.record_authentication_failure()
+        elif event_type == EventType.AUTHENTICATION_FAILURE and transition_applied:
+            security_context.record_authentication_failure()
+        elif event_type in AUTHENTICATION_INTERACTION_EVENTS and result == EventResult.FAILURE:
+            security_context.record_authentication_failure()
+
+        if event_type == EventType.SESSION_OPENED and operation_succeeded:
+            security_context.open_protected_session()
+
+        if event_type == EventType.ACCESS_GRANTED:
+            if authorization_evaluation is None:
+                decision, reason = AuthorizationDecision.DENIED, "authorization_unavailable"
+            else:
+                decision, reason = authorization_evaluation
+            outcome = (
+                ResourceOperationOutcome.SUCCESS
+                if decision is AuthorizationDecision.GRANTED and operation_succeeded
+                else (
+                    ResourceOperationOutcome.FAILURE
+                    if decision is AuthorizationDecision.GRANTED
+                    else ResourceOperationOutcome.NOT_EXECUTED
+                )
+            )
+            security_context.record_access_decision(decision, outcome, reason)
+            ctx["authorization_result"] = int(decision is AuthorizationDecision.GRANTED)
+        elif event_type == EventType.ACCESS_DENIED and transition_applied:
+            security_context.record_access_decision(
+                AuthorizationDecision.DENIED,
+                ResourceOperationOutcome.DENIED,
+                "reference_policy_denial",
+            )
+            ctx["authorization_result"] = 0
+
+        if event_type in {
+            EventType.SESSION_CLOSED,
+            EventType.DISCONNECT,
+            EventType.TIMEOUT,
+        } and transition_applied:
+            security_context.terminate_session()
+
         # ── Phase C: drive the real domain entities (flag-gated; no-op if None) ─
         # Exercises ECDH / enrollment / token issuance / broker sessions on the
         # core/ objects. Only override is the real token id at issuance; all
         # leakage-tuned feature values are left untouched.
-        if self.driver is not None:
+        if self.driver is not None and operation_succeeded:
             overrides = self.driver.on_event(event_type, rs, rs["current_ts"])
             if overrides:
                 rs.update(overrides)
@@ -850,29 +1007,29 @@ class EventEngine:
             ctx["s2_latency_ms"] = round(delay_ms, 2)
             if ctx["pairing_latency_ms"] == 0.0:
                 ctx["pairing_latency_ms"] = round(delay_ms, 2)
-        elif event_type == EventType.AUTHENTICATION_SUCCESS:
+        elif event_type == EventType.AUTHENTICATION_SUCCESS and operation_succeeded:
             ctx["s3_latency_ms"]      = round(delay_ms, 2)
             ctx["auth_latency_ms"]    = round(delay_ms, 2)
             ctx["final_auth_result"]  = 1
             ctx["connack_code"]       = "success"
             ctx["credential_status"]  = 1
-        elif event_type == EventType.AUTHENTICATION_FAILURE:
+        elif event_type == EventType.AUTHENTICATION_FAILURE and transition_applied:
             # Only update s3 if we haven't succeeded yet
             if ctx["final_auth_result"] == 0:
                 ctx["s3_latency_ms"]   = round(delay_ms, 2)
                 ctx["auth_latency_ms"] = round(delay_ms, 2)
             ctx["connack_code"] = failure_reason or "auth_failure"
-        elif event_type == EventType.TOKEN_ISSUED and ctx["s4_latency_ms"] == 0.0:
+        elif (event_type == EventType.TOKEN_ISSUED and operation_succeeded
+              and ctx["s4_latency_ms"] == 0.0):
             ctx["s4_latency_ms"] = round(delay_ms, 2)
-        elif event_type == EventType.SESSION_OPENED:
+        elif event_type == EventType.SESSION_OPENED and operation_succeeded:
             ctx["s5_latency_ms"]        = round(delay_ms, 2)
-            ctx["authorization_result"] = 1
             ctx["session_present"]      = 1
-        elif event_type == EventType.RENEWAL_REQUEST:
+        elif event_type == EventType.RENEWAL_REQUEST and operation_succeeded:
             ctx["s6_latency_ms"]    = round(delay_ms, 2)
             ctx["re_auth_required"] = 1
             te.record_renewal(rs["current_ts"])              # Phase 3: reset token clock
-        elif event_type == EventType.ACCESS_DENIED:
+        elif event_type == EventType.ACCESS_DENIED and transition_applied:
             ctx["topic_scope_violation"] = 1 if random.random() < 0.3 else 0
 
         ev_token_id = rs["token_id"] if event_type in TOKEN_CARRYING_EVENTS else None
@@ -881,9 +1038,7 @@ class EventEngine:
             new_state=new_state, result=result,
             failure_reason=failure_reason, session_id=rs["session_id"],
             scenario_id=spec.scenario_id, timestamp=rs["current_ts"],
-            trace_id=security_context.trace_id,
-            auth_attempt_id=security_context.current_auth_attempt_id,
-            protected_session_id=security_context.protected_session_id,
+            security_context=security_context,
             delay=delay, retry_count=rs["retry_count"],
             token_id=ev_token_id,
             token_expiry=rs["token_expiry"] if ev_token_id else None,
@@ -896,28 +1051,21 @@ class EventEngine:
         events.append(ev)
 
         security_context.record_result(result, failure_reason)
+        if event_type == EventType.AUTHENTICATION_SUCCESS and operation_succeeded:
+            security_context.record_authentication_success(ev.event_id)
+        if event_type in {
+            EventType.TOKEN_VALIDATED,
+            EventType.TOKEN_REJECTED,
+        }:
+            security_context.token_validation_event_id = ev.event_id
         if result == EventResult.SUCCESS:
             self.persistent_context.record_successful_event(event_type, new_state)
 
-        # Retry starts a distinct subsequent authentication attempt.  The RETRY
-        # event itself remains associated with the attempt being retried.
-        if event_type == EventType.RETRY and prev_state in {
-            AuthState.AUTH_FAILED,
-            AuthState.TOKEN_EXPIRED,
-        }:
-            security_context.start_auth_attempt()
-        elif event_type in {
+        if event_type in {
             EventType.AUTHENTICATION_SUCCESS,
             EventType.AUTHENTICATION_FAILURE,
         }:
             security_context.finish_auth_attempt()
-
-        if event_type in {
-            EventType.SESSION_CLOSED,
-            EventType.DISCONNECT,
-            EventType.TIMEOUT,
-        }:
-            security_context.terminate_session()
 
     # ══════════════════════════════════════════════════════════════════════════
     # SessionContext builder
@@ -963,7 +1111,10 @@ class EventEngine:
 
         # ── MQTT features ─────────────────────────────────────────────────────
         qos_level    = random.choice([0, 1, 2])
-        topic        = f"iot/{self.device_id[:8]}/telemetry"
+        topic        = (
+            security_context.topic
+            if security_context else f"iot/{self.device_id[:8]}/telemetry"
+        )
         # Payload size is drawn from one shared distribution regardless of the
         # label. Keying it on is_attack (10-512 vs 512-8192) made byte_rate
         # (= message_rate * payload_size) a perfect discriminator (AUC 0.96).
@@ -1035,6 +1186,13 @@ class EventEngine:
         # ── Attack labels (Phase 3 fix: correct type + SEVERITY_MAP) ──────────
         attack_phase = spec.injection_event.value if is_attack else "none"
         severity     = SEVERITY_MAP.get(spec.anomaly_type, "none") if is_attack else "none"
+
+        access_requests = (
+            [security_context.access_requests[request_id]
+             for request_id in security_context.access_request_ids]
+            if security_context else []
+        )
+        latest_access = access_requests[-1] if access_requests else None
 
         return SessionContext(
             # Identity
@@ -1128,6 +1286,50 @@ class EventEngine:
             ),
             persistent_enrolled         = persistent_context.enrolled if persistent_context else False,
             persistent_paired           = persistent_context.paired if persistent_context else False,
+            authentication_result_semantic = (
+                security_context.authentication_result.value
+                if security_context else AuthenticationResult.NOT_EVALUATED.value
+            ),
+            last_authentication_attempt_result = (
+                security_context.current_auth_attempt_result.value
+                if security_context else AuthenticationResult.NOT_EVALUATED.value
+            ),
+            authenticated_identity      = (
+                security_context.authenticated_identity if security_context else None
+            ),
+            authenticated_context_active = (
+                security_context.authenticated_context_active if security_context else False
+            ),
+            token_validation_result     = (
+                security_context.token_validation_result.value
+                if security_context else TokenValidationResult.NOT_EVALUATED.value
+            ),
+            token_context_active        = (
+                security_context.token_context_active if security_context else False
+            ),
+            protected_session_active    = (
+                security_context.protected_session_active if security_context else False
+            ),
+            requested_action            = (
+                security_context.requested_action if security_context else None
+            ),
+            authorization_decision      = (
+                latest_access.authorization_decision.value
+                if latest_access else AuthorizationDecision.NOT_EVALUATED.value
+            ),
+            resource_operation_outcome  = (
+                latest_access.resource_operation_outcome.value
+                if latest_access else ResourceOperationOutcome.NOT_EXECUTED.value
+            ),
+            access_request_ids          = tuple(
+                request.request_id for request in access_requests
+            ),
+            authorization_decisions     = tuple(
+                request.authorization_decision.value for request in access_requests
+            ),
+            resource_operation_outcomes = tuple(
+                request.resource_operation_outcome.value for request in access_requests
+            ),
         )
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1188,9 +1390,7 @@ class EventEngine:
         failure_reason: Optional[str],
         session_id:     str,
         scenario_id:    str,
-        trace_id:       str,
-        auth_attempt_id: Optional[str],
-        protected_session_id: Optional[str],
+        security_context: AuthenticationSessionContext,
         timestamp:      float,
         delay:          float,
         retry_count:    int,
@@ -1203,6 +1403,16 @@ class EventEngine:
         topic:          Optional[str]   = None,
         resource_id:    Optional[str]   = None,
     ) -> AuthEvent:
+        access_request = (
+            security_context.current_access_request
+            if event_type in {
+                EventType.ACCESS_REQUEST,
+                EventType.ACCESS_GRANTED,
+                EventType.ACCESS_DENIED,
+                EventType.RETRY,
+            }
+            else None
+        )
         return AuthEvent(
             event_type                 = event_type,
             device_id                  = self.device_id,
@@ -1215,9 +1425,10 @@ class EventEngine:
             failure_reason             = failure_reason,
             session_id                 = session_id,
             scenario_id                = scenario_id,
-            trace_id                   = trace_id,
-            auth_attempt_id            = auth_attempt_id,
-            protected_session_id       = protected_session_id,
+            trace_id                   = security_context.trace_id,
+            auth_attempt_id            = security_context.current_auth_attempt_id,
+            protected_session_id       = security_context.protected_session_id,
+            access_request_id          = access_request.request_id if access_request else None,
             timestamp                  = timestamp,
             delay_since_previous_event = delay,
             token_id                   = token_id,
@@ -1227,6 +1438,18 @@ class EventEngine:
             retry_count                = retry_count,
             topic                      = topic,
             resource_id                = resource_id,
+            requested_action           = access_request.requested_action if access_request else None,
+            authenticated_identity     = security_context.authenticated_identity,
+            token_validation_result    = security_context.token_validation_result.value,
+            authorization_decision     = (
+                access_request.authorization_decision.value if access_request else None
+            ),
+            resource_operation_outcome = (
+                access_request.resource_operation_outcome.value if access_request else None
+            ),
+            authenticated_context_active = security_context.authenticated_context_active,
+            token_context_active         = security_context.token_context_active,
+            protected_session_active     = security_context.protected_session_active,
             firmware_version           = self.firmware_version,
             anomaly_label              = anomaly_label,
             identity_claim             = identity_claim,

@@ -22,8 +22,8 @@ from typing import Any, Mapping, Optional
 
 BEHAVIOR_MODEL_VERSION = "behavioral-model-v1"
 GENERATOR_SOFTWARE_VERSION = "c1-sync-development"
-EVENT_SCHEMA_VERSION = "c1.2-development-event-schema"
-FEATURE_SCHEMA_VERSION = "c1.2-development-feature-schema"
+EVENT_SCHEMA_VERSION = "c1.3-development-event-schema"
+FEATURE_SCHEMA_VERSION = "c1.3-development-feature-schema"
 CONFIGURATION_VERSION = "historical-defaults-27135bf"
 
 

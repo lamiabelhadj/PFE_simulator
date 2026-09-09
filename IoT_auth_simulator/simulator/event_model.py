@@ -222,6 +222,7 @@ class AuthEvent:
     trace_id:             str           = field(default="")
     auth_attempt_id:      Optional[str] = field(default=None)
     protected_session_id: Optional[str] = field(default=None)
+    access_request_id:    Optional[str] = field(default=None)
 
     # ── Identity & token ──────────────────────────────────────────────────────
     token_id:       Optional[str] = field(default=None)
@@ -246,6 +247,16 @@ class AuthEvent:
     broker_id:   Optional[str] = field(default=None)
     topic:       Optional[str] = field(default=None)   # topic / resource requested
     resource_id: Optional[str] = field(default=None)
+    requested_action: Optional[str] = field(default=None)
+
+    # ── Explicit security decisions (C1-development vocabulary) ──────────────
+    authenticated_identity:      Optional[str] = field(default=None)
+    token_validation_result:     Optional[str] = field(default=None)
+    authorization_decision:      Optional[str] = field(default=None)
+    resource_operation_outcome:  Optional[str] = field(default=None)
+    authenticated_context_active: bool = field(default=False)
+    token_context_active:         bool = field(default=False)
+    protected_session_active:     bool = field(default=False)
 
     # ── Device metadata ───────────────────────────────────────────────────────
     firmware_version: Optional[str] = field(default=None)
@@ -281,6 +292,7 @@ class AuthEvent:
             "trace_id":                   self.trace_id,
             "auth_attempt_id":            self.auth_attempt_id,
             "protected_session_id":       self.protected_session_id,
+            "access_request_id":          self.access_request_id,
             # Entities
             "device_id":                  self.device_id,
             "gateway_id":                 self.gateway_id,
@@ -304,6 +316,15 @@ class AuthEvent:
             # MQTT / IoT context
             "topic":                      self.topic,
             "resource_id":                self.resource_id,
+            "requested_action":           self.requested_action,
+            # Security decisions
+            "authenticated_identity":     self.authenticated_identity,
+            "token_validation_result":    self.token_validation_result,
+            "authorization_decision":     self.authorization_decision,
+            "resource_operation_outcome": self.resource_operation_outcome,
+            "authenticated_context_active": self.authenticated_context_active,
+            "token_context_active":         self.token_context_active,
+            "protected_session_active":     self.protected_session_active,
             # Metadata
             "firmware_version":           self.firmware_version,
             "source_context":             self.source_context,

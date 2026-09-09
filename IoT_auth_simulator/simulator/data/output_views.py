@@ -128,13 +128,17 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
         "event_id", "event_type", "timestamp",
         "delay_since_previous_event",
         "scenario_id", "trace_id", "session_id",
-        "auth_attempt_id", "protected_session_id",
+        "auth_attempt_id", "protected_session_id", "access_request_id",
         "device_id", "gateway_id", "auth_server_id", "broker_id",
         "previous_state", "new_state",
         "result", "failure_reason", "retry_count",
         "token_id", "token_expiry", "token_scope",
         "nonce", "identity_claim",
-        "topic", "resource_id",
+        "topic", "resource_id", "requested_action",
+        "authenticated_identity", "token_validation_result",
+        "authorization_decision", "resource_operation_outcome",
+        "authenticated_context_active", "token_context_active",
+        "protected_session_active",
         "firmware_version", "source_context", "anomaly_label", "attack_type",
     ]
     extra = [c for c in df.columns if c not in ordered]
@@ -238,6 +242,23 @@ def _build_row(
         row["auth_result"]        = getattr(ctx, "auth_result", None)
         row["auth_latency_ms"]    = getattr(ctx, "auth_latency_ms", None)
         row["failed_auth_count"]  = getattr(ctx, "failed_auth_count", None)
+        row["authentication_result_semantic"] = getattr(
+            ctx, "authentication_result_semantic", "not_evaluated"
+        )
+        row["last_authentication_attempt_result"] = getattr(
+            ctx, "last_authentication_attempt_result", "not_evaluated"
+        )
+        row["authenticated_identity"] = getattr(ctx, "authenticated_identity", None)
+        row["authenticated_context_active"] = getattr(
+            ctx, "authenticated_context_active", False
+        )
+        row["token_validation_result"] = getattr(
+            ctx, "token_validation_result", "not_evaluated"
+        )
+        row["token_context_active"] = getattr(ctx, "token_context_active", False)
+        row["protected_session_active"] = getattr(
+            ctx, "protected_session_active", False
+        )
 
     # ── Phase 0: authorization ────────────────────────────────────────────────
     if ctx:
@@ -247,6 +268,16 @@ def _build_row(
         row["authorization_result"]  = getattr(ctx, "authorization_result", None)
         row["topic_scope_violation"] = getattr(ctx, "topic_scope_violation", None)
         row["retain_flag"]           = getattr(ctx, "retain_flag", None)
+        row["requested_action"]      = getattr(ctx, "requested_action", None)
+        row["authorization_decision"] = getattr(
+            ctx, "authorization_decision", "not_evaluated"
+        )
+        row["resource_operation_outcome"] = getattr(
+            ctx, "resource_operation_outcome", "not_executed"
+        )
+        row["access_request_count"] = len(
+            getattr(ctx, "access_request_ids", ())
+        )
 
     # ── Phase 0: MQTT session ─────────────────────────────────────────────────
     if ctx:
