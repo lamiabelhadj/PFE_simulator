@@ -163,6 +163,24 @@ RELIABLE_EVENTS = {
     EventType.DISCONNECT,
 }
 
+# A synchronized ScenarioSpec is an explicit semantic sequence.  Its positive
+# prerequisite steps cannot be assigned an unmodelled random ``transient_error``
+# and then followed as though they succeeded: doing so leaves the legacy FSM
+# behind the declared sequence and creates contradictory downstream evidence.
+# Explicit negative events (AUTHENTICATION_FAILURE / TOKEN_REJECTED /
+# ACCESS_DENIED) and the retry scenario continue to represent benign failure.
+# Keep this synchronized-only so the frozen historical generation profile
+# remains available as implementation evidence.
+SYNCHRONIZED_RELIABLE_PREREQUISITES = {
+    EventType.AUTHENTICATION_REQUEST,
+    EventType.CHALLENGE_SENT,
+    EventType.NONCE_RECEIVED,
+    EventType.RESPONSE_SENT,
+    EventType.RENEWAL_REQUEST,
+    EventType.ACCESS_REQUEST,
+    EventType.RETRY,
+}
+
 # These events communicate a negative semantic outcome while legitimately
 # advancing the legacy FSM into the corresponding failure/denial context.
 NEGATIVE_OUTCOME_TRANSITIONS = {
@@ -1117,6 +1135,11 @@ class EventEngine:
         rs["current_ts"] = semantic_clock.advance(delay)
         security_context.current_timestamp = rs["current_ts"]
         result, failure_reason = self._outcome(event_type, is_anomaly=False)
+        if (
+            spec.generation_profile == SYNCHRONIZED_GENERATION_PROFILE
+            and event_type in SYNCHRONIZED_RELIABLE_PREREQUISITES
+        ):
+            result, failure_reason = EventResult.SUCCESS, None
         if controlled_success:
             result, failure_reason = EventResult.SUCCESS, None
 
@@ -1124,6 +1147,8 @@ class EventEngine:
         # security context, not merely a reachable legacy FSM state.
         if event_type == EventType.TOKEN_ISSUED and (
             security_context.authentication_result is not AuthenticationResult.SUCCESS
+            or security_context.current_auth_attempt_result
+            is not AuthenticationResult.SUCCESS
         ):
             result, failure_reason = EventResult.FAILURE, "authentication_not_established"
         elif event_type == EventType.TOKEN_PRESENTED and not security_context.token_issued:
