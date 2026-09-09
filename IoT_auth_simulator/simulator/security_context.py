@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional
 
+from simulator.anomaly_contract import InjectionRecord
 from simulator.event_model import AuthState, EventResult, EventType
 
 
@@ -237,6 +238,7 @@ class AuthenticationSessionContext:
     current_access_request_id: Optional[str] = None
     access_request_ids: List[str] = field(default_factory=list)
     access_requests: Dict[str, AccessRequestContext] = field(default_factory=dict)
+    injection_records: List[InjectionRecord] = field(default_factory=list)
 
     def start_auth_attempt(self, *, renewal: bool = False) -> str:
         attempt_id = str(uuid.uuid4())

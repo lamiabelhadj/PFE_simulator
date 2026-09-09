@@ -25,6 +25,7 @@ from simulator.provenance import (
     FEATURE_SCHEMA_VERSION,
     GENERATOR_SOFTWARE_VERSION,
 )
+from simulator.anomaly_contract import synchronized_capability_report
 
 
 class MappingStatus(str, Enum):
@@ -151,15 +152,15 @@ DEVICE_STATE_MAPPINGS: Mapping[DeviceState, MappingEntry] = {
 
 
 ANOMALY_NAME_MAPPINGS: Mapping[str, MappingEntry] = {
-    "replay_token": _entry("replay_token", MappingStatus.MAPPED, "replay/single-use and credential/token-binding violation", alignment="conflicting", direction="Repair to require identifiable reuse of prior token material in a forbidden context."),
-    "nonce_reuse": _entry("nonce_reuse", MappingStatus.MAPPED, "temporal/freshness and replay/single-use violation", alignment="partial", direction="Require actual prior occurrence and declared uniqueness-domain evidence."),
-    "timestamp_inconsistency": _entry("timestamp_inconsistency", MappingStatus.MAPPED, "temporal/freshness consistency violation", alignment="partial", direction="Record and validate the violated temporal relationship; offsets are parameters only."),
+    "replay_token": _entry("replay_token", MappingStatus.UNSUPPORTED, "replay/single-use and credential/token-binding violation", alignment="quarantined historical variant", direction="Do not synchronize until an approved token reuse-forbidden domain exists."),
+    "nonce_reuse": _entry("nonce_reuse", MappingStatus.MAPPED, "temporal/freshness and replay/single-use violation", alignment="supported synchronized candidate awaiting final executable validation", direction="Use actual nonce material reused within one trace across authentication attempts."),
+    "timestamp_inconsistency": _entry("timestamp_inconsistency", MappingStatus.MAPPED, "temporal/freshness consistency violation", alignment="supported synchronized candidate awaiting final executable validation", direction="Keep semantic time monotonic and transform observed timestamp evidence relative to its predecessor."),
     "duplicate_sequence": _entry("duplicate_sequence", MappingStatus.UNSUPPORTED, "lifecycle/causal ordering or replay/sequence uniqueness violation", alignment="conflicting", direction="Quarantine until actual duplicated sequence evidence exists; otherwise map an illegal event to transition validity."),
     "impersonation": _entry("impersonation", MappingStatus.COMPOSITE, "identity consistency, credential binding, and/or authentication-validity violations", alignment="conflicting", direction="Retain only as scenario provenance and expose each observable violation separately."),
     "identity_token_mismatch": _entry("identity_token_mismatch", MappingStatus.COMPOSITE, "identity consistency and/or credential/token-binding violation", alignment="conflicting", direction="Separate identity inconsistency from token-binding mismatch."),
     "access_without_auth": _entry("access_without_auth", MappingStatus.COMPOSITE, "authorization/access-precondition violation", alignment="conflicting", direction="Identify the specific authentication, token-validation, or authorization prerequisite violated."),
     "abnormal_failure_rate": _entry("abnormal_failure_rate", MappingStatus.UNSUPPORTED, "frequency/history behavior", alignment="conflicting", direction="Quarantine behavioral label until observable history/window and an approved limit or baseline exist."),
-    "abnormal_renewal": _entry("abnormal_renewal", MappingStatus.COMPOSITE, "deterministic renewal validity and/or frequency/history behavior", alignment="conflicting", direction="Separate rule-decidable invalid renewal from statistically unusual renewal behavior."),
+    "abnormal_renewal": _entry("abnormal_renewal", MappingStatus.UNSUPPORTED, "deterministic renewal validity and/or frequency/history behavior", alignment="unsupported history-dependent behavior", direction="Separate later deterministic violations from statistically unusual behavior; do not emit the historical positive label."),
 }
 
 
@@ -261,6 +262,7 @@ def semantic_mapping_report() -> dict:
         "anomaly_names": _serialized(ANOMALY_NAME_MAPPINGS),
         "scenario_mechanisms": _serialized(SCENARIO_MECHANISM_MAPPINGS),
         "identifier_semantics": IDENTIFIER_SEMANTICS,
+        "synchronized_anomaly_capabilities": synchronized_capability_report(),
         "status_summary": {
             "event_types": _status_counts(EVENT_TYPE_MAPPINGS),
             "auth_states": _status_counts(AUTH_STATE_MAPPINGS),

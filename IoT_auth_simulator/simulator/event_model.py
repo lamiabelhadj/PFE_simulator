@@ -219,6 +219,9 @@ class AuthEvent:
     observed_timestamp: Optional[float] = field(default=None)
     observed_timestamp_source: str = field(default="semantic_clock")
     targeted_temporal_relationship: Optional[str] = field(default=None)
+    injection_id: Optional[str] = field(default=None)
+    anomaly_variant_name: Optional[str] = field(default=None)
+    invariant_families: tuple[str, ...] = field(default_factory=tuple)
     scenario_id: str   = field(default="")
     # Historical trace-grouping identifier retained for compatibility.  It is
     # not the device lifetime, scenario, authentication attempt, or protected
@@ -299,6 +302,9 @@ class AuthEvent:
             ),
             "observed_timestamp_source":  self.observed_timestamp_source,
             "targeted_temporal_relationship": self.targeted_temporal_relationship,
+            "injection_id":                self.injection_id,
+            "anomaly_variant_name":        self.anomaly_variant_name,
+            "invariant_families":          list(self.invariant_families),
             "scenario_id":                self.scenario_id,
             "session_id":                 self.session_id,
             "trace_id":                   self.trace_id,

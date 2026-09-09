@@ -78,7 +78,7 @@ def run_simulation(
 
     # Build the full scenario batch (normal + attack, shuffled).
     scenario_engine = ScenarioEngine(seed=cfg.simulation.random_seed)
-    specs = scenario_engine.batch(
+    specs = scenario_engine.synchronized_batch(
         n_normal     = cfg.simulation.num_sessions_normal,
         n_attack     = cfg.simulation.num_sessions_attack,
         distribution = cfg.simulation.attack_distribution,

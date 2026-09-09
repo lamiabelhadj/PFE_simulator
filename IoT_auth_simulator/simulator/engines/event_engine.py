@@ -29,6 +29,12 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Tuple
 
 from simulator.config.settings import cfg
+from simulator.anomaly_contract import (
+    InjectionRecord,
+    SYNCHRONIZED_GENERATION_PROFILE,
+    VARIANT_CAPABILITIES,
+    VariantCapabilityStatus,
+)
 from simulator.event_model import AuthEvent, AuthState, EventResult, EventType
 from simulator.state_machine import StateMachine, TransitionError
 from simulator.engines.scenario_engine import REGISTRATION_PHASE, ScenarioSpec
@@ -498,6 +504,11 @@ class SessionContext:
     protected_session_ended_at:   Optional[float] = None
     renewal_requested_at:        Optional[float] = None
     renewed_token_issued_at:      Optional[float] = None
+    generation_profile:           str = "historical-27135bf"
+    attack_scenario_intent:       bool = False
+    observable_anomaly:           bool = False
+    observable_violation_candidate: bool = False
+    injection_records:            Tuple[dict, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -582,6 +593,9 @@ class EventEngine:
         legacy_session_id = str(uuid.uuid4())
         trace_id          = str(uuid.uuid4())
         is_attack  = spec.is_anomaly
+        synchronized_profile = (
+            spec.generation_profile == SYNCHRONIZED_GENERATION_PROFILE
+        )
         profile    = DELAY_PROFILE   # single, label-independent timing for every session
 
         # ── Session-level MQTT / token context (one value per session) ─────────
@@ -671,11 +685,9 @@ class EventEngine:
         }
 
         # ── Stealth decision (attacks only) ───────────────────────────────────
-        # A stealth attack EVADES detection: it runs the FULL legitimate flow with
-        # no injected anomaly, so its telemetry is indistinguishable from a normal
-        # session. It stays labelled as an attack (is_anomaly=1) but carries no
-        # detector signal — a genuine false negative that keeps recall realistic
-        # (< 1), modelling an attacker that perfectly mimics legitimate behaviour.
+        # Scenario intent is retained independently from observable evidence.
+        # A stealth selection executes a coherent trace with no transformation
+        # and therefore cannot become observable anomaly truth.
         stealth = (spec.is_anomaly
                    and random.random() < STEALTH_FRACTION.get(spec.anomaly_type, DEFAULT_STEALTH))
         ctx["_stealth"] = stealth
@@ -683,16 +695,39 @@ class EventEngine:
         # ── Run legitimate steps ──────────────────────────────────────────────
         # Detected attacks run up to the injection point (then inject below);
         # normal sessions and stealth attacks run the full flow.
-        steps_to_run = (
-            normal_steps[:injection_position]
-            if (spec.is_anomaly and not stealth) else normal_steps
-        )
+        if (
+            synchronized_profile
+            and spec.is_anomaly
+            and not stealth
+            and spec.anomaly_type == "timestamp_inconsistency"
+        ):
+            steps_to_run = normal_steps
+        else:
+            steps_to_run = (
+                normal_steps[:injection_position]
+                if (spec.is_anomaly and not stealth) else normal_steps
+            )
 
         for event_type in steps_to_run:
             self._run_step(event_type, sm, rs, ctx, te, events, profile, spec)
 
-        # ── Anomaly injection (detected attacks only) ─────────────────────────
-        if spec.is_anomaly and not stealth:
+        # ── Synchronized controlled transformations ──────────────────────────
+        if synchronized_profile and spec.is_anomaly and not stealth:
+            record = self._apply_synchronized_injection(
+                spec=spec,
+                normal_steps=normal_steps,
+                injection_position=injection_position,
+                sm=sm,
+                rs=rs,
+                ctx=ctx,
+                te=te,
+                events=events,
+                profile=profile,
+            )
+            security_context.injection_records.append(record)
+
+        # ── Historical injection path retained as pre-canonical evidence ─────
+        elif spec.is_anomaly and not stealth:
             delay          = self._sample_delay(spec.injection_event, profile)
             rs["current_ts"] = semantic_clock.advance(delay)
             security_context.current_timestamp = semantic_clock.now
@@ -818,7 +853,7 @@ class EventEngine:
         # looking but legitimate condition with no attack present → keeps
         # precision realistic (< 1). A minority trip an actual detector flag
         # (clock-skew replay), the real-world source of IDS false alarms. ───────
-        elif random.random() < FALSE_POSITIVE_FRACTION:
+        elif not spec.is_anomaly and random.random() < FALSE_POSITIVE_FRACTION:
             roll = random.random()
             if roll < 0.35:
                 ctx["source_ip_change"] = 1                       # device roamed networks
@@ -845,6 +880,192 @@ class EventEngine:
         self.last_authentication_context = security_context
         return events, context
 
+    def _apply_synchronized_injection(
+        self,
+        *,
+        spec: ScenarioSpec,
+        normal_steps: List[EventType],
+        injection_position: Optional[int],
+        sm: StateMachine,
+        rs: Dict,
+        ctx: Dict,
+        te: TemporalEngine,
+        events: List[AuthEvent],
+        profile: Dict[EventType, Tuple[float, float]],
+    ) -> InjectionRecord:
+        """Apply one supported C1.5 transformation and retain its evidence."""
+        if spec.anomaly_type not in VARIANT_CAPABILITIES:
+            raise ValueError(f"unknown synchronized anomaly variant: {spec.anomaly_type}")
+        capability = VARIANT_CAPABILITIES[spec.anomaly_type]
+        if capability.status is not VariantCapabilityStatus.SUPPORTED_PENDING_VALIDATION:
+            raise ValueError(
+                f"quarantined variant cannot execute in synchronized profile: "
+                f"{spec.anomaly_type}"
+            )
+
+        security_context: AuthenticationSessionContext = rs["security_context"]
+        injection_id = str(uuid.uuid4())
+
+        if spec.anomaly_type == "nonce_reuse":
+            source = next(
+                (
+                    event for event in events
+                    if event.event_type == EventType.NONCE_RECEIVED
+                    and event.nonce
+                    and event.auth_attempt_id != security_context.current_auth_attempt_id
+                ),
+                None,
+            )
+            original_nonce = rs.get("nonce")
+            if source is None or injection_position is None:
+                return InjectionRecord(
+                    injection_id=injection_id,
+                    historical_scenario_name=spec.anomaly_type,
+                    anomaly_variant_name=spec.anomaly_type,
+                    capability_status=capability.status.value,
+                    mapped_semantic_concept=capability.semantic_concept,
+                    invariant_families=capability.invariant_families,
+                    trace_id=security_context.trace_id,
+                    device_id=self.device_id,
+                    session_id=security_context.legacy_session_id,
+                    auth_attempt_id=security_context.current_auth_attempt_id,
+                    declared_history_scope=capability.history_scope,
+                    intended_observable_violation="reuse challenge nonce across authentication attempts",
+                    validation_status="injection_not_applied_missing_source_evidence",
+                )
+
+            rs["nonce"] = source.nonce
+            security_context.current_challenge_nonce = source.nonce
+            self._run_step(
+                EventType.NONCE_RECEIVED,
+                sm,
+                rs,
+                ctx,
+                te,
+                events,
+                profile,
+                spec,
+                controlled_success=True,
+            )
+            reused = events[-1]
+            evidence_ok = (
+                reused.nonce == source.nonce
+                and reused.auth_attempt_id != source.auth_attempt_id
+            )
+            reused.injection_id = injection_id
+            reused.anomaly_variant_name = spec.anomaly_type
+            reused.invariant_families = capability.invariant_families
+            reused.anomaly_label = spec.anomaly_type if evidence_ok else None
+            reused.source_context = "controlled_injection" if evidence_ok else "normal"
+            ctx["nonce_age_at_reuse"] = round(
+                max(0.0, reused.timestamp - source.timestamp), 6
+            )
+
+            for event_type in normal_steps[injection_position + 1:]:
+                self._run_step(event_type, sm, rs, ctx, te, events, profile, spec)
+
+            return InjectionRecord(
+                injection_id=injection_id,
+                historical_scenario_name=spec.anomaly_type,
+                anomaly_variant_name=spec.anomaly_type,
+                capability_status=capability.status.value,
+                mapped_semantic_concept=capability.semantic_concept,
+                invariant_families=capability.invariant_families,
+                targeted_event_type=EventType.NONCE_RECEIVED.value,
+                targeted_action_or_context="renewal authentication attempt challenge response",
+                source_evidence_event_ids=(source.event_id,),
+                source_material_identifier=source.nonce,
+                source_trace_id=source.trace_id,
+                source_session_id=source.session_id,
+                source_auth_attempt_id=source.auth_attempt_id,
+                original_value=original_nonce,
+                injected_value=source.nonce,
+                injection_parameters={"transformation": "replace_nonce_with_prior_attempt_nonce"},
+                trace_id=reused.trace_id,
+                device_id=reused.device_id,
+                session_id=reused.session_id,
+                auth_attempt_id=reused.auth_attempt_id,
+                declared_history_scope=capability.history_scope,
+                intended_observable_violation="same nonce material reused across authentication attempts",
+                transformation_applied=True,
+                evidence_check_passed=evidence_ok,
+                observable_violation_candidate=evidence_ok,
+            )
+
+        target = next(
+            (event for event in events if event.event_type == EventType.RESPONSE_SENT),
+            None,
+        )
+        if target is None:
+            return InjectionRecord(
+                injection_id=injection_id,
+                historical_scenario_name=spec.anomaly_type,
+                anomaly_variant_name=spec.anomaly_type,
+                capability_status=capability.status.value,
+                mapped_semantic_concept=capability.semantic_concept,
+                invariant_families=capability.invariant_families,
+                trace_id=security_context.trace_id,
+                device_id=self.device_id,
+                session_id=security_context.legacy_session_id,
+                declared_history_scope=capability.history_scope,
+                intended_observable_violation="observed response precedes causal predecessor",
+                validation_status="injection_not_applied_missing_target_evidence",
+            )
+
+        target_index = events.index(target)
+        predecessor = events[target_index - 1] if target_index else None
+        original_observed = target.observed_timestamp
+        offset_s = random.uniform(400, 900)
+        predecessor_observed = (
+            predecessor.observed_timestamp
+            if predecessor and predecessor.observed_timestamp is not None
+            else predecessor.timestamp if predecessor else target.timestamp
+        )
+        injected_observed = original_observed - offset_s
+        target.observed_timestamp = injected_observed
+        target.observed_timestamp_source = "injected_device_timestamp"
+        target.targeted_temporal_relationship = "declared_event_time_after_predecessor"
+        target.injection_id = injection_id
+        target.anomaly_variant_name = spec.anomaly_type
+        target.invariant_families = capability.invariant_families
+        evidence_ok = (
+            predecessor is not None
+            and target.timestamp > predecessor.timestamp
+            and injected_observed < predecessor_observed
+        )
+        target.anomaly_label = spec.anomaly_type if evidence_ok else None
+        target.source_context = "controlled_injection" if evidence_ok else "normal"
+        ctx["timestamp_delta_s"] = round(offset_s, 6)
+
+        return InjectionRecord(
+            injection_id=injection_id,
+            historical_scenario_name=spec.anomaly_type,
+            anomaly_variant_name=spec.anomaly_type,
+            capability_status=capability.status.value,
+            mapped_semantic_concept=capability.semantic_concept,
+            invariant_families=capability.invariant_families,
+            targeted_event_type=target.event_type.value,
+            targeted_action_or_context="observed timestamp of causal response event",
+            source_evidence_event_ids=(predecessor.event_id,) if predecessor else (),
+            source_trace_id=predecessor.trace_id if predecessor else None,
+            source_session_id=predecessor.session_id if predecessor else None,
+            source_auth_attempt_id=(
+                predecessor.auth_attempt_id if predecessor else None
+            ),
+            original_value=original_observed,
+            injected_value=injected_observed,
+            injection_parameters={"offset_s": round(offset_s, 6)},
+            trace_id=target.trace_id,
+            device_id=target.device_id,
+            session_id=target.session_id,
+            auth_attempt_id=target.auth_attempt_id,
+            declared_history_scope=capability.history_scope,
+            intended_observable_violation="observed response timestamp precedes predecessor",
+            transformation_applied=True,
+            evidence_check_passed=evidence_ok,
+            observable_violation_candidate=evidence_ok,
+        )
+
     # ══════════════════════════════════════════════════════════════════════════
     # Single-step executor (one AuthEvent from one EventType)
     # ══════════════════════════════════════════════════════════════════════════
@@ -859,6 +1080,7 @@ class EventEngine:
         events:     List[AuthEvent],
         profile:    Dict[EventType, Tuple[float, float]],
         spec:       ScenarioSpec,
+        controlled_success: bool = False,
     ) -> None:
         """
         Execute one legitimate flow step: advance the state machine, update the
@@ -895,6 +1117,8 @@ class EventEngine:
         rs["current_ts"] = semantic_clock.advance(delay)
         security_context.current_timestamp = rs["current_ts"]
         result, failure_reason = self._outcome(event_type, is_anomaly=False)
+        if controlled_success:
+            result, failure_reason = EventResult.SUCCESS, None
 
         # Success-dependent operations require evidence in the explicit
         # security context, not merely a reachable legacy FSM state.
@@ -1254,6 +1478,18 @@ class EventEngine:
             if security_context else []
         )
         latest_access = access_requests[-1] if access_requests else None
+        injection_records = (
+            tuple(record.to_dict() for record in security_context.injection_records)
+            if security_context else ()
+        )
+        observable_candidate = any(
+            record.get("observable_violation_candidate", False)
+            for record in injection_records
+        )
+        if spec.generation_profile != SYNCHRONIZED_GENERATION_PROFILE:
+            # Compatibility classification for explicitly requested historical
+            # traces. Scenario intent alone still does not label stealth traces.
+            observable_candidate = any(event.anomaly_label for event in events)
 
         return SessionContext(
             # Identity
@@ -1433,6 +1669,11 @@ class EventEngine:
             renewed_token_issued_at      = (
                 security_context.renewed_token_issued_at if security_context else None
             ),
+            generation_profile           = spec.generation_profile,
+            attack_scenario_intent       = spec.is_anomaly,
+            observable_anomaly           = observable_candidate,
+            observable_violation_candidate = observable_candidate,
+            injection_records            = injection_records,
         )
 
     # ══════════════════════════════════════════════════════════════════════════

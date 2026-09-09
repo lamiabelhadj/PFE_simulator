@@ -20,12 +20,13 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from simulator.semantic_time import temporal_contract_metadata
+from simulator.anomaly_contract import synchronized_capability_report
 
 
 BEHAVIOR_MODEL_VERSION = "behavioral-model-v1"
 GENERATOR_SOFTWARE_VERSION = "c1-sync-development"
-EVENT_SCHEMA_VERSION = "c1.4-development-event-schema"
-FEATURE_SCHEMA_VERSION = "c1.4-development-feature-schema"
+EVENT_SCHEMA_VERSION = "c1.5-development-event-schema"
+FEATURE_SCHEMA_VERSION = "c1.5-development-feature-schema"
 CONFIGURATION_VERSION = "historical-defaults-27135bf"
 
 
@@ -109,6 +110,7 @@ class GenerationProvenance:
     configuration_snapshot_reference: str
     configuration_snapshot: dict[str, Any]
     temporal_contract: dict[str, Any]
+    anomaly_capability_contract: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -137,4 +139,5 @@ def build_generation_provenance(
         configuration_snapshot_reference=configuration_snapshot_reference(snapshot),
         configuration_snapshot=snapshot,
         temporal_contract=temporal_contract_metadata(config),
+        anomaly_capability_contract=synchronized_capability_report(),
     )

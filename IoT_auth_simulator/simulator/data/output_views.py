@@ -57,7 +57,10 @@ def to_json_log(sequences: SequenceInput) -> str:
             continue
         first         = events[0]
         anomaly_lbls  = {e.anomaly_label for e in events if e.anomaly_label}
-        scenario_type = next(iter(anomaly_lbls), "normal")
+        scenario_type = (
+            getattr(ctx, "attack_type", "normal")
+            if ctx else next(iter(anomaly_lbls), "normal")
+        )
         entry: Dict = {
             "scenario_id":   first.scenario_id,
             "trace_id":      first.trace_id,
@@ -72,6 +75,15 @@ def to_json_log(sequences: SequenceInput) -> str:
             ),
             "scenario_type": scenario_type,
             "event_count":   len(events),
+            "generation_profile": getattr(ctx, "generation_profile", None) if ctx else None,
+            "attack_scenario_intent": (
+                getattr(ctx, "attack_scenario_intent", False) if ctx else False
+            ),
+            "observable_anomaly": (
+                getattr(ctx, "observable_anomaly", bool(anomaly_lbls))
+                if ctx else bool(anomaly_lbls)
+            ),
+            "injection_records": getattr(ctx, "injection_records", ()) if ctx else (),
             "events":        [e.to_dict() for e in events],
         }
         if ctx:
@@ -106,6 +118,14 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
         for event in events:
             d = event.to_dict()
             d["attack_type"] = attack_type
+            d["generation_profile"] = getattr(ctx, "generation_profile", None) if ctx else None
+            d["attack_scenario_intent"] = (
+                getattr(ctx, "attack_scenario_intent", False) if ctx else False
+            )
+            d["observable_anomaly"] = (
+                getattr(ctx, "observable_anomaly", bool(event.anomaly_label))
+                if ctx else bool(event.anomaly_label)
+            )
             rows.append(d)
     if not rows:
         return pd.DataFrame()
@@ -135,6 +155,7 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
     ordered = [
         "event_id", "event_type", "timestamp", "observed_timestamp",
         "observed_timestamp_source", "targeted_temporal_relationship",
+        "injection_id", "anomaly_variant_name", "invariant_families",
         "delay_since_previous_event",
         "scenario_id", "trace_id", "session_id",
         "auth_attempt_id", "protected_session_id", "access_request_id",
@@ -149,6 +170,7 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
         "authenticated_context_active", "token_context_active",
         "protected_session_active",
         "firmware_version", "source_context", "anomaly_label", "attack_type",
+        "generation_profile", "attack_scenario_intent", "observable_anomaly",
     ]
     extra = [c for c in df.columns if c not in ordered]
     return df[[c for c in ordered if c in df.columns] + extra]
@@ -338,10 +360,8 @@ def _build_row(
 
     # ── Phase 2: temporal ─────────────────────────────────────────────────────
     delays = [e.delay_since_previous_event for e in events]
-    # Monotonic session span: latest stamped time minus the first event, clamped
-    # at 0. Using max() (not last) keeps a timestamp_inconsistency event's
-    # backward-dated stamp from producing a negative duration that would by
-    # itself flag the attack.
+    # Session duration uses authoritative semantic timestamps. Any separately
+    # injected observed timestamp evidence cannot alter this value.
     row["session_duration_s"] = round(
         max(0.0, max(e.timestamp for e in events) - first.timestamp), 4
     )
@@ -387,10 +407,21 @@ def _build_row(
 
     # ── Labels (Phase 0 naming + Phase 2 additions) ───────────────────────────
     if ctx:
-        row["is_anomaly"]   = int(getattr(ctx, "attack_type", "normal") != "normal")
+        row["is_anomaly"]   = int(getattr(ctx, "observable_anomaly", False))
         row["attack_type"]  = getattr(ctx, "attack_type", "normal")
         row["attack_phase"] = getattr(ctx, "attack_phase", "none")
         row["severity"]     = getattr(ctx, "severity", "none")
+        row["attack_scenario_intent"] = int(
+            getattr(ctx, "attack_scenario_intent", False)
+        )
+        row["observable_anomaly"] = int(
+            getattr(ctx, "observable_anomaly", False)
+        )
+        row["observable_violation_candidate"] = int(
+            getattr(ctx, "observable_violation_candidate", False)
+        )
+        row["generation_profile"] = getattr(ctx, "generation_profile", None)
+        row["injection_count"] = len(getattr(ctx, "injection_records", ()))
     else:
         attack_evs = [e for e in events if getattr(e, "anomaly_label", None) or getattr(e, "source_context", "") == "attack"]
         row["is_anomaly"]   = int(bool(attack_evs))

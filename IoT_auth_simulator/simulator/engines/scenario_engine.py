@@ -52,6 +52,11 @@ from typing import Dict, List, Optional, Tuple
 
 from simulator.event_model import AuthState, EventType
 from simulator.state_machine import ANOMALY_TRANSITIONS, all_anomaly_types
+from simulator.anomaly_contract import (
+    HISTORICAL_GENERATION_PROFILE,
+    SYNCHRONIZED_GENERATION_PROFILE,
+    supported_synchronized_variants,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -260,6 +265,7 @@ class ScenarioSpec:
     scenario_id:   str
     scenario_type: str            # "normal" | anomaly label
     is_anomaly:    bool
+    generation_profile: str = HISTORICAL_GENERATION_PROFILE
 
     # Normal flow definition
     normal_steps: List[EventType] = field(default_factory=lambda: list(NORMAL_FLOW))
@@ -469,6 +475,42 @@ class ScenarioEngine:
             injection_event      = event,
         )
 
+    def synchronized_anomaly(self, anomaly_type: str) -> ScenarioSpec:
+        """Build only a C1.5-supported controlled transformation candidate."""
+        if anomaly_type not in supported_synchronized_variants():
+            raise ValueError(
+                f"'{anomaly_type}' is not a supported synchronized variant; "
+                f"supported: {supported_synchronized_variants()}"
+            )
+
+        if anomaly_type == "nonce_reuse":
+            # Execute the first attempt and reach the nonce step of a later
+            # renewal attempt. The injector replaces that fresh attempt's nonce
+            # with material observed in the earlier attempt.
+            steps = list(NORMAL_FLOW_WITH_RENEWAL)
+            position = 19
+            from_state = AuthState.CHALLENGE_ISSUED
+            event = EventType.NONCE_RECEIVED
+        else:
+            # Transform the observed timestamp of the ordinary response event;
+            # semantic execution itself remains the normal flow.
+            steps = list(NORMAL_FLOW)
+            position = 9
+            from_state = AuthState.CHALLENGE_ISSUED
+            event = EventType.RESPONSE_SENT
+
+        return ScenarioSpec(
+            scenario_id=str(uuid.uuid4()),
+            scenario_type=anomaly_type,
+            is_anomaly=True,
+            generation_profile=SYNCHRONIZED_GENERATION_PROFILE,
+            normal_steps=steps,
+            anomaly_type=anomaly_type,
+            injection_position=position,
+            injection_from_state=from_state,
+            injection_event=event,
+        )
+
     # ── Batch generation ───────────────────────────────────────────────────────
 
     def batch(
@@ -532,6 +574,58 @@ class ScenarioEngine:
         for atype, count in counts.items():
             for _ in range(count):
                 specs.append(self.anomaly(atype))
+
+        random.shuffle(specs)
+        return specs
+
+    def synchronized_batch(
+        self,
+        n_normal: int,
+        n_attack: int,
+        distribution: Dict[str, float],
+        retry_ratio: float = 0.15,
+        renewal_ratio: float = 0.12,
+        partial_ratio: float = 0.20,
+    ) -> List[ScenarioSpec]:
+        """Generate only the explicitly supported C1.5 synchronized subset.
+
+        Historical distribution entries remain configuration evidence but are
+        filtered and renormalized rather than advertised as supported variants.
+        """
+        if retry_ratio + renewal_ratio + partial_ratio > 1.0:
+            raise ValueError("retry + renewal + partial ratios must sum to <= 1.0")
+
+        supported = set(supported_synchronized_variants())
+        selected = {
+            name: weight for name, weight in distribution.items()
+            if name in supported and weight > 0
+        }
+        if n_attack and not selected:
+            raise ValueError("attack distribution contains no supported synchronized variant")
+        total_weight = sum(selected.values())
+        normalized = {
+            name: weight / total_weight for name, weight in selected.items()
+        } if selected else {}
+
+        specs: List[ScenarioSpec] = []
+        n_retry = int(n_normal * retry_ratio)
+        n_renewal = int(n_normal * renewal_ratio)
+        n_partial = int(n_normal * partial_ratio)
+        n_full = n_normal - n_retry - n_renewal - n_partial
+        normal_specs = (
+            [self.normal() for _ in range(n_full)]
+            + [self.normal_with_retry() for _ in range(n_retry)]
+            + [self.normal_with_renewal() for _ in range(n_renewal)]
+            + [self.normal_partial() for _ in range(n_partial)]
+        )
+        for spec in normal_specs:
+            spec.generation_profile = SYNCHRONIZED_GENERATION_PROFILE
+        specs.extend(normal_specs)
+
+        for anomaly_type, count in self._split_counts(n_attack, normalized).items():
+            specs.extend(
+                self.synchronized_anomaly(anomaly_type) for _ in range(count)
+            )
 
         random.shuffle(specs)
         return specs
