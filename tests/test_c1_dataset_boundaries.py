@@ -180,7 +180,10 @@ class DatasetInformationBoundaryTests(unittest.TestCase):
         )
         self.assertFalse(capabilities["global_discrete_event_simulation"])
         self.assertFalse(capabilities["operational_trace_support"])
-        self.assertFalse(capabilities["full_executable_invariant_validation"])
+        self.assertEqual(
+            "implemented_supported_v1_subset",
+            capabilities["full_executable_invariant_validation"],
+        )
         json.loads(json.dumps(capabilities))
 
     def test_historical_feature_builder_is_explicitly_legacy(self):
@@ -205,12 +208,14 @@ class DatasetInformationBoundaryTests(unittest.TestCase):
             paths = SynchronizedOutputViews(directory).save(
                 self.sequences, stem="test", provenance=self.provenance
             )
-            self.assertEqual(7, len(paths))
+            self.assertEqual(8, len(paths))
             self.assertTrue(all(path.exists() for path in paths.values()))
             manifest = json.loads(Path(paths["field_manifest"]).read_text())
             dataset = json.loads(Path(paths["dataset_manifest"]).read_text())
+            validation = json.loads(Path(paths["validation_report"]).read_text())
             self.assertEqual("detector_observations", manifest["default_detector_view"])
             self.assertEqual("run-c1.6", dataset["run_id"])
+            self.assertIn("build_gate", validation)
 
     def test_default_generator_export_uses_synchronized_not_legacy_surface(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(

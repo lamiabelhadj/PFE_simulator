@@ -24,8 +24,8 @@ def save(
     """
     Save the simulation output to DATA_DIR.
 
-    Writes detector observations, event/trace GT, provenance, debug, and
-    machine-readable field/dataset manifests as separate artifacts.
+    Writes detector observations, event/trace GT, provenance, debug,
+    validation, and machine-readable field/dataset manifests separately.
 
     If parquet=True, also writes detector observations as Parquet.
 

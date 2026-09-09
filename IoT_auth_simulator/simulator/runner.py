@@ -8,7 +8,7 @@ Architecture (Phase 2)
 ──────────────────────
   ScenarioEngine.batch()  →  List[ScenarioSpec]
   EventEngine.execute()   →  (List[AuthEvent], SessionContext)
-  synchronized exporter   →  observations, GT, provenance, debug, manifests
+  synchronized exporter   →  observations, GT, provenance, debug, validation
 """
 
 import random

@@ -14,11 +14,16 @@ from typing import Any, Iterable, Optional
 
 from simulator.anomaly_contract import synchronized_capability_report
 from simulator.provenance import GenerationProvenance
+from simulator.validation import (
+    GROUND_TRUTH_SCHEMA_VERSION,
+    VALIDATION_SCHEMA_VERSION,
+    VALIDATOR_VERSION,
+)
 
 
-FIELD_MANIFEST_VERSION = "c1.6-development-field-manifest"
-DATASET_MANIFEST_VERSION = "c1.6-development-dataset-manifest"
-DATASET_INTERFACE_VERSION = "c1.6-development-dataset-interface"
+FIELD_MANIFEST_VERSION = "c1.7-development-field-manifest"
+DATASET_MANIFEST_VERSION = "c1.7-development-dataset-manifest"
+DATASET_INTERFACE_VERSION = "c1.7-development-dataset-interface"
 SYNCHRONIZED_OBSERVATION_VIEW = "detector_observations"
 HISTORICAL_FEATURE_VIEW = "historical_109_column_feature_representation"
 
@@ -137,7 +142,7 @@ SYNCHRONIZED_FIELD_DEFINITIONS: tuple[FieldDefinition, ...] = (
            "synchronized export ordering", privileged=True),
     _field("anomaly_label", _GT_EVENT, "string|null", FieldRole.GROUND_TRUTH,
            Availability.NOT_APPLICABLE, "AuthEvent.anomaly_label", privileged=True,
-           implementation_notes="C1.5 candidate label; not C1.7 validator-backed truth."),
+           implementation_notes="Candidate label reconciled with independent C1.7 validation status."),
     _field("anomaly_variant_name", _GT_EVENT, "string|null", FieldRole.GROUND_TRUTH,
            Availability.NOT_APPLICABLE, "AuthEvent.anomaly_variant_name", privileged=True),
     _field("invariant_families", _GT_EVENT, "array[string]", FieldRole.GROUND_TRUTH,
@@ -145,13 +150,13 @@ SYNCHRONIZED_FIELD_DEFINITIONS: tuple[FieldDefinition, ...] = (
     _field("observable_violation_candidate", _GT_EVENT, "boolean", FieldRole.GROUND_TRUTH,
            Availability.NOT_APPLICABLE, "presence of C1.5 event candidate evidence", privileged=True),
     _field("validation_status", _GT_EVENT, "string", FieldRole.GROUND_TRUTH,
-           Availability.NOT_APPLICABLE, "C1.5 validation boundary", privileged=True),
+           Availability.NOT_APPLICABLE, "C1.7 independent validator", privileged=True),
 
     _field("trace_id", _GT_TRACE, "string", FieldRole.IDENTIFIER, Availability.NOT_APPLICABLE,
            "SessionContext.trace_id", grouping_identifier=True, privileged=True),
     _field("observable_anomaly", _GT_TRACE, "boolean", FieldRole.GROUND_TRUTH,
            Availability.NOT_APPLICABLE, "SessionContext.observable_anomaly", privileged=True,
-           implementation_notes="Provisional C1.5 evidence outcome, pending C1.7 validation."),
+           implementation_notes="C1.5 evidence outcome accompanied by independent C1.7 status."),
     _field("observable_violation_candidate", _GT_TRACE, "boolean", FieldRole.GROUND_TRUTH,
            Availability.NOT_APPLICABLE, "SessionContext.observable_violation_candidate", privileged=True),
     _field("anomaly_variants", _GT_TRACE, "array[string]", FieldRole.GROUND_TRUTH,
@@ -170,9 +175,9 @@ SYNCHRONIZED_FIELD_DEFINITIONS: tuple[FieldDefinition, ...] = (
     _field("capabilities", _PROV_DATASET, "object", FieldRole.PROVENANCE,
            Availability.NOT_APPLICABLE, "dataset_capability_manifest", privileged=True),
     _field("field_manifest_version", _PROV_DATASET, "string", FieldRole.PROVENANCE,
-           Availability.NOT_APPLICABLE, "C1.6 contract", privileged=True),
+           Availability.NOT_APPLICABLE, "C1.7 integrated dataset contract", privileged=True),
     _field("row_alignment", _PROV_DATASET, "string", FieldRole.PROVENANCE,
-           Availability.NOT_APPLICABLE, "C1.6 export contract", privileged=True),
+           Availability.NOT_APPLICABLE, "C1.6 information-boundary contract", privileged=True),
     _field("randomness_metadata", _PROV_DATASET, "object", FieldRole.PROVENANCE,
            Availability.NOT_APPLICABLE, "generation configuration", privileged=True),
 
@@ -388,7 +393,7 @@ def dataset_capability_manifest(
     return {
         "manifest_version": DATASET_MANIFEST_VERSION,
         "dataset_interface_version": DATASET_INTERFACE_VERSION,
-        "dataset_version": "c1.6-development-unreleased",
+        "dataset_version": "c1.7-development-unreleased",
         "behavior_model_version": provenance.behavior_model_version,
         "event_schema_version": provenance.event_schema_version,
         "feature_schema_version": provenance.feature_schema_version,
@@ -409,10 +414,14 @@ def dataset_capability_manifest(
         "concurrency_support": "none_sequential_generation_only",
         "operational_trace_support": False,
         "calibration_status": "not_calibrated_against_operational_or_testbed_data",
-        "full_executable_invariant_validation": False,
+        "validator_version": VALIDATOR_VERSION,
+        "validation_schema_version": VALIDATION_SCHEMA_VERSION,
+        "ground_truth_schema_version": GROUND_TRUTH_SCHEMA_VERSION,
+        "full_executable_invariant_validation": "implemented_supported_v1_subset",
         "default_detector_view": _OBS,
         "known_limitations": [
-            "C1.5 observable-violation values are candidates pending C1.7 validation.",
+            "Only the deterministic and two anomaly-evidence checks in the C1.7 supported subset are validated.",
+            "Validation may reject traces produced by historical transient-progression behavior; failures are retained rather than relabeled.",
             "Monitoring/observation point is unresolved; internal security decisions are excluded.",
             "No cross-session token or nonce material history is claimed.",
             "No final ML prediction horizon or feature selection is encoded.",

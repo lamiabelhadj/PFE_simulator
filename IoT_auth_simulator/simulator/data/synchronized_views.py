@@ -1,4 +1,4 @@
-"""Separated C1.6 synchronized dataset views and serialization."""
+"""Separated synchronized dataset views with C1.7 validation integration."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from simulator.data.dataset_contract import (
 from simulator.engines.event_engine import SessionContext
 from simulator.event_model import AuthEvent
 from simulator.provenance import GenerationProvenance, build_generation_provenance
+from simulator.validation import ValidationReport, validate_synchronized_dataset
 
 
 SequencePairs = list[tuple[list[AuthEvent], SessionContext]]
@@ -67,7 +68,10 @@ def to_detector_observation_df(sequences: SequencePairs) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=field_names_for_view("detector_observations"))
 
 
-def to_ground_truth_views(sequences: SequencePairs) -> dict[str, list[dict[str, Any]]]:
+def to_ground_truth_views(
+    sequences: SequencePairs,
+    validation: Optional[ValidationReport] = None,
+) -> dict[str, list[dict[str, Any]]]:
     _require_synchronized_profiles(sequences)
     event_rows: list[dict[str, Any]] = []
     trace_rows: list[dict[str, Any]] = []
@@ -87,8 +91,11 @@ def to_ground_truth_views(sequences: SequencePairs) -> dict[str, list[dict[str, 
                     record and record.get("observable_violation_candidate", False)
                 ),
                 "validation_status": (
-                    record.get("validation_status") if record
-                    else "no_candidate_for_validation"
+                    validation.event_ground_truth_statuses.get(event.event_id)
+                    if validation else (
+                        record.get("validation_status") if record
+                        else "validation_not_run"
+                    )
                 ),
             })
             ordinal += 1
@@ -104,10 +111,11 @@ def to_ground_truth_views(sequences: SequencePairs) -> dict[str, list[dict[str, 
                 family for record in records
                 for family in record.get("invariant_families", ())
             }),
-            "validation_statuses": sorted({
-                record.get("validation_status", "candidate_pending_full_executable_validation")
-                for record in records
-            }),
+            "validation_statuses": [
+                validation.trace_ground_truth_statuses.get(
+                    context.trace_id, "validation_failed"
+                )
+            ] if validation else ["validation_not_run"],
             "hard_negative_status": "not_implemented",
         })
     return {"events": event_rows, "traces": trace_rows}
@@ -263,12 +271,20 @@ def build_synchronized_bundle(
     observations = to_detector_observation_df(sequences)
     manifest = field_manifest()
     manifest["legacy_representation"] = legacy_contract_for_sequences(sequences)
+    provenance_view = to_provenance_view(sequences, provenance)
+    validation = validate_synchronized_dataset(
+        sequences,
+        provenance=provenance,
+        field_manifest=manifest,
+        dataset_manifest=provenance_view["dataset"]["capabilities"],
+    )
     return {
         "detector_observations": observations.to_dict(orient="records"),
-        "ground_truth": to_ground_truth_views(sequences),
-        "provenance": to_provenance_view(sequences, provenance),
+        "ground_truth": to_ground_truth_views(sequences, validation),
+        "provenance": provenance_view,
         "debug": to_debug_view(sequences),
         "field_manifest": manifest,
+        "validation": validation.to_dict(),
     }
 
 
@@ -295,6 +311,7 @@ class SynchronizedOutputViews:
             "debug": self.output_dir / f"{stem}_debug.json",
             "field_manifest": self.output_dir / f"{stem}_field_manifest.json",
             "dataset_manifest": self.output_dir / f"{stem}_dataset_manifest.json",
+            "validation_report": self.output_dir / f"{stem}_validation_report.json",
         }
         pd.DataFrame(bundle["detector_observations"]).to_csv(paths["detector_observations"], index=False)
         pd.DataFrame(bundle["ground_truth"]["events"]).to_csv(paths["ground_truth_events"], index=False)
@@ -305,6 +322,9 @@ class SynchronizedOutputViews:
         paths["dataset_manifest"].write_text(
             json.dumps(bundle["provenance"]["dataset"]["capabilities"], indent=2),
             encoding="utf-8",
+        )
+        paths["validation_report"].write_text(
+            json.dumps(bundle["validation"], indent=2), encoding="utf-8"
         )
         return paths
 
