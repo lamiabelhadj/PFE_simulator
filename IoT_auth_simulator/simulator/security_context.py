@@ -124,6 +124,26 @@ class PersistentDeviceContext:
     # Reserved reference buckets for later explicitly authorized history work.
     # C1.2 does not assign replay/nonce/frequency semantics or populate them.
     history_references: Dict[str, List[str]] = field(default_factory=dict)
+    semantic_time_cursor: Optional[float] = None
+    completed_trace_count: int = 0
+
+    def begin_trace(self, requested_start: float) -> float:
+        """Return a start in this device's monotonic semantic history."""
+        requested_start = float(requested_start)
+        if self.semantic_time_cursor is None:
+            return requested_start
+        return max(requested_start, self.semantic_time_cursor)
+
+    def complete_trace(self, semantic_end: float) -> None:
+        """Commit chronological progress without assigning replay semantics."""
+        semantic_end = float(semantic_end)
+        if (
+            self.semantic_time_cursor is not None
+            and semantic_end < self.semantic_time_cursor
+        ):
+            raise ValueError("persistent device semantic time cannot move backwards")
+        self.semantic_time_cursor = semantic_end
+        self.completed_trace_count += 1
 
     def legacy_auth_state(self) -> AuthState:
         """Adapt persistent facts to the existing FSM's initial state."""
@@ -175,18 +195,31 @@ class AuthenticationSessionContext:
     topic: str
     resource_id: str
     requested_action: str
+    semantic_time_domain: str = "synthetic-sequential-seconds"
+    trace_started_at: Optional[float] = None
+    trace_ended_at: Optional[float] = None
 
     current_auth_attempt_id: Optional[str] = None
     auth_attempt_ids: List[str] = field(default_factory=list)
     renewal_auth_attempt_ids: List[str] = field(default_factory=list)
     current_challenge_nonce: Optional[str] = None
     token_id: Optional[str] = None
+    token_issued_at: Optional[float] = None
+    token_presented_at: Optional[float] = None
+    token_validation_at: Optional[float] = None
+    token_validity_duration_s: Optional[float] = None
     token_expiry: Optional[float] = None
     protected_session_id: Optional[str] = None
     refreshes_protected_session_id: Optional[str] = None
     protected_session_active: bool = False
     authentication_attempt_active: bool = False
     renewal_in_progress: bool = False
+    renewal_requested_at: Optional[float] = None
+    renewed_token_issued_at: Optional[float] = None
+    challenge_issued_at: Optional[float] = None
+    challenge_response_at: Optional[float] = None
+    protected_session_started_at: Optional[float] = None
+    protected_session_ended_at: Optional[float] = None
     retry_count: int = 0
     last_result: Optional[EventResult] = None
     last_failure_reason: Optional[str] = None
@@ -218,14 +251,16 @@ class AuthenticationSessionContext:
             self.refreshes_protected_session_id = self.protected_session_id
         return attempt_id
 
-    def open_protected_session(self) -> str:
+    def open_protected_session(self, now: float) -> str:
         if self.protected_session_id is None:
             self.protected_session_id = str(uuid.uuid4())
         self.protected_session_active = True
+        self.protected_session_started_at = float(now)
+        self.protected_session_ended_at = None
         self.terminated = False
         return self.protected_session_id
 
-    def terminate_session(self) -> None:
+    def terminate_session(self, now: float) -> None:
         """End local activity without modifying persistent device context."""
         self.protected_session_active = False
         self.authentication_attempt_active = False
@@ -233,6 +268,8 @@ class AuthenticationSessionContext:
         self.token_context_active = False
         self.renewal_in_progress = False
         self.terminated = True
+        if self.protected_session_started_at is not None:
+            self.protected_session_ended_at = float(now)
 
     def record_result(
         self,

@@ -143,13 +143,21 @@ class Gateway:
     # Step 1 — Discovery
     # ══════════════════════════════════════════════════════════════════════════
 
-    def respond_to_discovery(self, device_id: str, source_ip: str) -> dict:
+    def respond_to_discovery(
+        self,
+        device_id: str,
+        source_ip: str,
+        now: Optional[float] = None,
+    ) -> dict:
         """
         Acknowledge a device discovery probe.
         Returns a service advertisement payload.
         """
-        self._log_request(source_ip)
-        session = self._get_or_create_session(device_id, source_ip)
+        semantic_now = float(now) if now is not None else time.time()
+        self._log_request(source_ip, now=semantic_now)
+        session = self._get_or_create_session(
+            device_id, source_ip, now=semantic_now
+        )
         session.connection_count += 1
 
         return {
@@ -219,7 +227,12 @@ class Gateway:
     # Step 5 — MQTT session gating
     # ══════════════════════════════════════════════════════════════════════════
 
-    def validate_mqtt_token(self, device_id: str, token: str) -> Tuple[bool, str]:
+    def validate_mqtt_token(
+        self,
+        device_id: str,
+        token: str,
+        now: Optional[float] = None,
+    ) -> Tuple[bool, str]:
         """
         Verify the token before the broker allows Publish/Subscribe.
 
@@ -232,14 +245,15 @@ class Gateway:
         if not session or session.token != token:
             return False, "token_mismatch"
 
-        age = time.time() - (session.token_issued_at or 0)
-        if age > cfg.security.token_lifetime_s:
+        semantic_now = float(now) if now is not None else time.time()
+        age = semantic_now - (session.token_issued_at or 0)
+        if age >= cfg.security.token_lifetime_s:
             return False, "token_expired"
 
-        if self._is_replay(token):
+        if self._is_replay(token, now=semantic_now):
             return False, "replay_detected"
 
-        self._register_in_replay_window(token)
+        self._register_in_replay_window(token, now=semantic_now)
         return True, "ok"
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -329,50 +343,71 @@ class Gateway:
         if session:
             session.failed_count += 1
 
-    def record_session_success(self, device_id: str) -> None:
+    def record_session_success(
+        self, device_id: str, now: Optional[float] = None
+    ) -> None:
         """Mark session as successfully re-authenticated."""
         session = self.sessions.get(device_id)
         if session:
-            session.last_seen = time.time()
+            session.last_seen = float(now) if now is not None else time.time()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Internal helpers
     # ══════════════════════════════════════════════════════════════════════════
 
-    def _get_or_create_session(self, device_id: str, source_ip: str) -> DeviceSession:
+    def _get_or_create_session(
+        self,
+        device_id: str,
+        source_ip: str,
+        now: Optional[float] = None,
+    ) -> DeviceSession:
         if device_id not in self.sessions:
             self.sessions[device_id] = DeviceSession(
                 device_id=device_id,
                 source_ip=source_ip,
+                last_seen=float(now) if now is not None else time.time(),
             )
         session = self.sessions[device_id]
         session.register_ip(source_ip)
         return session
 
-    def _is_rate_limited(self, source_ip: str, window_s: float = 5.0, max_req: int = 20) -> bool:
+    def _is_rate_limited(
+        self,
+        source_ip: str,
+        window_s: float = 5.0,
+        max_req: int = 20,
+        now: Optional[float] = None,
+    ) -> bool:
         """
         Simple sliding-window rate limiter per source IP.
         Returns True if the IP has exceeded max_req in the last window_s seconds.
         """
-        now  = time.time()
+        now = float(now) if now is not None else time.time()
         log  = self._request_log[source_ip]
         # Purge old entries
         self._request_log[source_ip] = [t for t in log if now - t < window_s]
         return len(self._request_log[source_ip]) >= max_req
 
-    def _log_request(self, source_ip: str) -> None:
-        self._request_log[source_ip].append(time.time())
+    def _log_request(self, source_ip: str, now: Optional[float] = None) -> None:
+        self._request_log[source_ip].append(
+            float(now) if now is not None else time.time()
+        )
 
-    def _is_replay(self, token: str) -> bool:
+    def _is_replay(self, token: str, now: Optional[float] = None) -> bool:
         """Check whether this token was seen within the replay window."""
         token_hash = self._token_hash(token)
         if token_hash not in self._replay_window:
             return False
-        age = time.time() - self._replay_window[token_hash]
+        semantic_now = float(now) if now is not None else time.time()
+        age = semantic_now - self._replay_window[token_hash]
         return age <= cfg.security.replay_window_s
 
-    def _register_in_replay_window(self, token: str) -> None:
-        self._replay_window[self._token_hash(token)] = time.time()
+    def _register_in_replay_window(
+        self, token: str, now: Optional[float] = None
+    ) -> None:
+        self._replay_window[self._token_hash(token)] = (
+            float(now) if now is not None else time.time()
+        )
 
     @staticmethod
     def _token_hash(token: str) -> str:

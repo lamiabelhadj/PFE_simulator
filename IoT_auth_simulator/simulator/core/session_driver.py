@@ -82,7 +82,9 @@ class SessionDriver:
         contributes the real token id), or ``None`` for pure side-effect events.
         """
         if event_type == EventType.DISCOVERY:
-            self.gateway.respond_to_discovery(self.device_id, self.source_ip)
+            self.gateway.respond_to_discovery(
+                self.device_id, self.source_ip, now=now
+            )
             self.gateway.terminate_tls(self.device_id, self.source_ip)
             self.stats["tls_channels"] += 1
 
@@ -115,7 +117,9 @@ class SessionDriver:
                 self.stats["nonces_cached"] += 1
 
         elif event_type == EventType.TOKEN_ISSUED:
-            token, _reason = self.auth_server.issue_token(self.device_id, self._psk_hash)
+            token, _reason = self.auth_server.issue_token(
+                self.device_id, self._psk_hash, now=now
+            )
             if token is not None:
                 self._token = token
                 self.gateway.relay_token(self.device_id, token.to_string(), token.issued_at)
@@ -128,18 +132,21 @@ class SessionDriver:
         elif event_type == EventType.SESSION_OPENED:
             if self._token is not None:
                 ok, _code, _meta = self.broker.connect(
-                    self.device_id, self._token.to_string(), self.auth_server
+                    self.device_id, self._token.to_string(), self.auth_server,
+                    now=now,
                 )
                 if ok:
                     self.stats["broker_connects"] += 1
 
         elif event_type == EventType.ACCESS_GRANTED:
             topic = rs.get("topic") or f"iot/{self.device_id[:8]}/telemetry"
-            self.broker.publish(self.device_id, topic, b"telemetry", qos=1)
+            self.broker.publish(
+                self.device_id, topic, b"telemetry", qos=1, now=now
+            )
             self.gateway.authorize_topic(self.device_id, topic, "publish")
             self.stats["publishes"] += 1
 
         elif event_type in (EventType.SESSION_CLOSED, EventType.DISCONNECT):
-            self.broker.disconnect(self.device_id)
+            self.broker.disconnect(self.device_id, now=now)
 
         return None

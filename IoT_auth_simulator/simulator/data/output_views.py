@@ -89,7 +89,7 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
     One row per AuthEvent.
 
     The `timestamp` column is rendered as a human-readable UTC datetime string
-    (YYYY-MM-DD HH:MM:SS — e.g. "2026-06-23 14:30:05"), and each row carries the
+    with microseconds, and each row carries the
     session-level `attack_type` label so the per-event log is self-describing
     and filterable.
     """
@@ -111,12 +111,20 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
-    # Render the raw Unix timestamp as a human-readable UTC string:
+    # Render the semantic timestamp using its Unix-compatible coordinate:
     # full date + time, e.g. "2026-06-23 14:30:05".
     df["timestamp"] = (
         pd.to_datetime(df["timestamp"], unit="s")
-          .dt.strftime("%Y-%m-%d %H:%M:%S")
+          .dt.strftime("%Y-%m-%d %H:%M:%S.%f")
     )
+    if "observed_timestamp" in df.columns:
+        observed_dt = pd.to_datetime(
+            df["observed_timestamp"], unit="s", errors="coerce"
+        )
+        df["observed_timestamp"] = (
+            observed_dt.dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+            .where(observed_dt.notna(), None)
+        )
     # token_expiry is also a Unix timestamp — render it the same way, leaving
     # rows without a token blank rather than showing "NaT".
     if "token_expiry" in df.columns:
@@ -125,7 +133,8 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
             expiry_dt.dt.strftime("%Y-%m-%d %H:%M:%S").where(expiry_dt.notna(), None)
         )
     ordered = [
-        "event_id", "event_type", "timestamp",
+        "event_id", "event_type", "timestamp", "observed_timestamp",
+        "observed_timestamp_source", "targeted_temporal_relationship",
         "delay_since_previous_event",
         "scenario_id", "trace_id", "session_id",
         "auth_attempt_id", "protected_session_id", "access_request_id",
@@ -258,6 +267,27 @@ def _build_row(
         row["token_context_active"] = getattr(ctx, "token_context_active", False)
         row["protected_session_active"] = getattr(
             ctx, "protected_session_active", False
+        )
+        row["semantic_time_domain"] = getattr(ctx, "semantic_time_domain", None)
+        row["trace_started_at"] = getattr(ctx, "trace_started_at", None)
+        row["trace_ended_at"] = getattr(ctx, "trace_ended_at", None)
+        row["token_issued_at"] = getattr(ctx, "token_issued_at", None)
+        row["token_presented_at"] = getattr(ctx, "token_presented_at", None)
+        row["token_validation_at"] = getattr(ctx, "token_validation_at", None)
+        row["token_validity_duration_s"] = getattr(
+            ctx, "token_validity_duration_s", None
+        )
+        row["challenge_issued_at"] = getattr(ctx, "challenge_issued_at", None)
+        row["challenge_response_at"] = getattr(ctx, "challenge_response_at", None)
+        row["protected_session_started_at"] = getattr(
+            ctx, "protected_session_started_at", None
+        )
+        row["protected_session_ended_at"] = getattr(
+            ctx, "protected_session_ended_at", None
+        )
+        row["renewal_requested_at"] = getattr(ctx, "renewal_requested_at", None)
+        row["renewed_token_issued_at"] = getattr(
+            ctx, "renewed_token_issued_at", None
         )
 
     # ── Phase 0: authorization ────────────────────────────────────────────────

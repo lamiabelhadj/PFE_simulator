@@ -12,6 +12,7 @@ Architecture (Phase 2)
 """
 
 import random
+import time
 import uuid
 from collections import defaultdict
 from typing import Callable, List, Optional, Tuple
@@ -38,6 +39,9 @@ def run_simulation(
       context : SessionContext with all session-level features for the feature CSV
     """
     random.seed(cfg.simulation.random_seed)
+    # One coordinate anchor per run. It is used only to make exported semantic
+    # times human-readable; all ordering and validity use per-device clocks.
+    semantic_time_origin = time.time()
 
     # Build device pool — each device has a stable IP, PSK, and trust score.
     devices = [Device.create(index=i) for i in range(cfg.simulation.num_devices)]
@@ -107,6 +111,7 @@ def run_simulation(
             battery_level    = device.battery_level,
             firmware_version = device.firmware_version,
             driver           = driver,
+            start_time       = semantic_time_origin,
             persistent_context = persistent_contexts[device.device_id],
         )
         pair = engine.execute(spec)

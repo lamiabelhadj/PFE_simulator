@@ -34,7 +34,12 @@ class AccessToken:
 
     @property
     def is_expired(self) -> bool:
-        return time.time() > self.expires_at
+        """Wall-clock convenience for standalone/debug use."""
+        return self.is_expired_at(time.time())
+
+    def is_expired_at(self, now: float) -> bool:
+        """Evaluate expiry in the caller's declared time domain."""
+        return float(now) >= self.expires_at
 
     @property
     def lifetime_s(self) -> float:
@@ -127,6 +132,7 @@ class AuthServer:
         device_id:      str,
         psk_hash:       str,
         short_lifetime: bool = False,
+        now: Optional[float] = None,
     ) -> Tuple[Optional[AccessToken], str]:
         """
         Issue an OAuth2/ACE access token.
@@ -149,7 +155,7 @@ class AuthServer:
             self.total_token_failures += 1
             return None, "psk_mismatch"
 
-        now      = time.time()
+        now      = float(now) if now is not None else time.time()
         lifetime = (
             cfg.security.token_lifetime_short_s
             if short_lifetime
@@ -201,7 +207,11 @@ class AuthServer:
     # Step 6 — Token revalidation
     # ══════════════════════════════════════════════════════════════════════════
 
-    def revalidate_token(self, token_string: str) -> Tuple[bool, str]:
+    def revalidate_token(
+        self,
+        token_string: str,
+        now: Optional[float] = None,
+    ) -> Tuple[bool, str]:
         """
         Re-verify a token during continuous Zero-Trust revalidation.
 
@@ -225,7 +235,8 @@ class AuthServer:
         if not token:
             return False, "token_not_found"
 
-        if token.is_expired:
+        validation_time = float(now) if now is not None else time.time()
+        if token.is_expired_at(validation_time):
             return False, "token_expired"
 
         return True, "revalidated"
@@ -284,6 +295,7 @@ class MQTTBroker:
         auth_server:   AuthServer,
         clean_session: bool = True,
         keep_alive_s:  int  = None,
+        now: Optional[float] = None,
     ) -> Tuple[bool, str, dict]:
         """
         Process an MQTT CONNECT from a device.
@@ -296,20 +308,20 @@ class MQTTBroker:
         """
         keep_alive_s = keep_alive_s or cfg.device.keep_alive_normal_s
 
-        valid, reason = auth_server.revalidate_token(token_string)
+        semantic_now = float(now) if now is not None else time.time()
+        valid, reason = auth_server.revalidate_token(token_string, now=semantic_now)
         if not valid:
             self.total_connects += 1
             return False, reason, {}
 
-        now = time.time()
         session_present = device_id in self._sessions
 
         session_meta = {
             "session_present":  session_present,
             "clean_session":    clean_session,
             "keep_alive_s":     keep_alive_s,
-            "connected_at":     now,
-            "last_seen":        now,
+            "connected_at":     semantic_now,
+            "last_seen":        semantic_now,
             "publish_count":    0,
             "subscribe_count":  0,
             "byte_count":       0,
@@ -331,6 +343,7 @@ class MQTTBroker:
         payload:   bytes,
         qos:       int  = 1,
         retain:    bool = False,
+        now:       Optional[float] = None,
     ) -> Tuple[bool, str]:
         """
         Simulate a PUBLISH operation, enforcing topic scope.
@@ -346,7 +359,7 @@ class MQTTBroker:
         session = self._sessions[device_id]
         session["publish_count"] += 1
         session["byte_count"]    += len(payload)
-        session["last_seen"]      = time.time()
+        session["last_seen"]      = float(now) if now is not None else time.time()
         self.total_publishes     += 1
 
         if topic_violation:
@@ -376,6 +389,7 @@ class MQTTBroker:
         device_id: str,
         topic:     str,
         qos:       int = 1,
+        now:       Optional[float] = None,
     ) -> Tuple[bool, int, str]:
         """
         Simulate a SUBSCRIBE operation.
@@ -387,7 +401,7 @@ class MQTTBroker:
 
         session = self._sessions[device_id]
         session["subscribe_count"] += 1
-        session["last_seen"]        = time.time()
+        session["last_seen"]        = float(now) if now is not None else time.time()
         self.total_subscribes      += 1
 
         granted_qos = min(qos, max(cfg.mqtt.qos_levels))
@@ -414,19 +428,20 @@ class MQTTBroker:
         """Close every stale session and return how many were closed."""
         stale = self.stale_sessions(now)
         for device_id in stale:
-            self.disconnect(device_id)
+            self.disconnect(device_id, now=now)
         return len(stale)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Disconnect
     # ══════════════════════════════════════════════════════════════════════════
 
-    def disconnect(self, device_id: str) -> float:
+    def disconnect(self, device_id: str, now: Optional[float] = None) -> float:
         """Close the MQTT session and return session duration in seconds."""
         session = self._sessions.pop(device_id, None)
         if session:
             self.total_disconnects += 1
-            return time.time() - session.get("connected_at", time.time())
+            semantic_now = float(now) if now is not None else time.time()
+            return semantic_now - session.get("connected_at", semantic_now)
         return 0.0
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -436,11 +451,12 @@ class MQTTBroker:
     def get_session(self, device_id: str) -> Optional[dict]:
         return self._sessions.get(device_id)
 
-    def session_duration(self, device_id: str) -> float:
+    def session_duration(self, device_id: str, now: Optional[float] = None) -> float:
         session = self._sessions.get(device_id)
         if not session:
             return 0.0
-        return time.time() - session.get("connected_at", time.time())
+        semantic_now = float(now) if now is not None else time.time()
+        return semantic_now - session.get("connected_at", semantic_now)
 
     def __repr__(self) -> str:
         return (

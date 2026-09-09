@@ -214,6 +214,11 @@ class AuthEvent:
     # ── Auto-generated identifiers ────────────────────────────────────────────
     event_id:    str   = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp:   float = field(default_factory=time.time)
+    # ``timestamp`` is authoritative semantic time. ``observed_timestamp`` may
+    # later carry altered/declared evidence without rewinding semantic history.
+    observed_timestamp: Optional[float] = field(default=None)
+    observed_timestamp_source: str = field(default="semantic_clock")
+    targeted_temporal_relationship: Optional[str] = field(default=None)
     scenario_id: str   = field(default="")
     # Historical trace-grouping identifier retained for compatibility.  It is
     # not the device lifetime, scenario, authentication attempt, or protected
@@ -287,6 +292,13 @@ class AuthEvent:
             "event_id":                   self.event_id,
             "event_type":                 self.event_type.value,
             "timestamp":                  round(self.timestamp, 6),
+            "observed_timestamp":         round(
+                self.observed_timestamp
+                if self.observed_timestamp is not None else self.timestamp,
+                6,
+            ),
+            "observed_timestamp_source":  self.observed_timestamp_source,
+            "targeted_temporal_relationship": self.targeted_temporal_relationship,
             "scenario_id":                self.scenario_id,
             "session_id":                 self.session_id,
             "trace_id":                   self.trace_id,

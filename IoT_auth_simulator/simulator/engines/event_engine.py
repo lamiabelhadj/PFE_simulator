@@ -42,6 +42,7 @@ from simulator.security_context import (
     ResourceOperationOutcome,
     TokenValidationResult,
 )
+from simulator.semantic_time import SEMANTIC_TIME_DOMAIN, SemanticClock
 
 
 # ── Severity map ──────────────────────────────────────────────────────────────
@@ -484,6 +485,19 @@ class SessionContext:
     access_request_ids:         Tuple[str, ...] = field(default_factory=tuple)
     authorization_decisions:    Tuple[str, ...] = field(default_factory=tuple)
     resource_operation_outcomes: Tuple[str, ...] = field(default_factory=tuple)
+    semantic_time_domain:        str = SEMANTIC_TIME_DOMAIN
+    trace_started_at:            Optional[float] = None
+    trace_ended_at:              Optional[float] = None
+    token_issued_at:             Optional[float] = None
+    token_presented_at:          Optional[float] = None
+    token_validation_at:         Optional[float] = None
+    token_validity_duration_s:   Optional[float] = None
+    challenge_issued_at:         Optional[float] = None
+    challenge_response_at:       Optional[float] = None
+    protected_session_started_at: Optional[float] = None
+    protected_session_ended_at:   Optional[float] = None
+    renewal_requested_at:        Optional[float] = None
+    renewed_token_issued_at:      Optional[float] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -534,7 +548,9 @@ class EventEngine:
         self.firmware_version = firmware_version or random.choice(
             cfg.device.firmware_versions
         )
-        self.start_time       = start_time or time.time()
+        # Wall time may anchor the coordinate for readable exports, but the
+        # generated semantic path consults only its SemanticClock thereafter.
+        self.start_time       = float(start_time) if start_time is not None else time.time()
         self.persistent_context = persistent_context or PersistentDeviceContext(
             device_id=device_id
         )
@@ -557,6 +573,8 @@ class EventEngine:
           context : SessionContext with all Phase 0 features
         """
         initial_state, normal_steps, injection_position = self._execution_plan(spec)
+        trace_start = self.persistent_context.begin_trace(self.start_time)
+        semantic_clock = SemanticClock(trace_start)
         sm         = StateMachine(initial_state=initial_state)
         events:    List[AuthEvent] = []
         # ``session_id`` is the historical per-trace grouping id.  Keep it for
@@ -574,7 +592,18 @@ class EventEngine:
         resource_id:  str = f"resource://{self.device_id[:8]}/{scope_resource}"
 
         # Phase 3 — temporal tracker for this session
-        te = TemporalEngine(config=TemporalConfig(), is_attack=is_attack)
+        # The pre-C1 EventEngine already exposed cfg.security.token_lifetime_s
+        # as token_expiry. Use that same historical reference-profile value for
+        # enforcement; legacy TemporalEngine 3600/120-second defaults are not
+        # promoted into synchronized semantic truth.
+        te = TemporalEngine(
+            config=TemporalConfig(
+                token_lifetime=cfg.security.token_lifetime_s,
+                attack_token_life=cfg.security.token_lifetime_s,
+                replay_window=cfg.security.replay_window_s,
+            ),
+            is_attack=False,
+        )
 
         # ── Mutable run-state threaded through every step (see _run_step) ──────
         security_context = AuthenticationSessionContext(
@@ -583,14 +612,17 @@ class EventEngine:
             scenario_id=spec.scenario_id,
             legacy_session_id=legacy_session_id,
             current_auth_state=initial_state,
-            current_timestamp=self.start_time,
+            current_timestamp=semantic_clock.now,
             token_scope=token_scope,
             topic=topic,
             resource_id=resource_id,
             requested_action=requested_action,
+            semantic_time_domain=SEMANTIC_TIME_DOMAIN,
+            trace_started_at=semantic_clock.now,
         )
         rs: Dict = {
-            "current_ts":   self.start_time,
+            "current_ts":   semantic_clock.now,
+            "semantic_clock": semantic_clock,
             "token_id":     None,          # set once a token is issued
             "token_expiry": None,
             "nonce":        None,
@@ -662,12 +694,15 @@ class EventEngine:
         # ── Anomaly injection (detected attacks only) ─────────────────────────
         if spec.is_anomaly and not stealth:
             delay          = self._sample_delay(spec.injection_event, profile)
-            rs["current_ts"] += delay
-            # Timestamp the injected event off the (monotonic) session clock.
-            # timestamp_inconsistency rewinds ONLY this event's declared time
-            # (below); the server-side clock keeps advancing so any continuation
-            # and the session-duration span stay physically consistent.
-            injected_ts = rs["current_ts"]
+            rs["current_ts"] = semantic_clock.advance(delay)
+            security_context.current_timestamp = semantic_clock.now
+            # The semantic timestamp stays on the monotonic clock. A historical
+            # timestamp_inconsistency injection alters only separately exposed
+            # observed/declared evidence in preparation for C1.5 reconciliation.
+            semantic_event_ts = rs["current_ts"]
+            observed_timestamp = semantic_event_ts
+            observed_timestamp_source = "semantic_clock"
+            targeted_temporal_relationship = None
 
             # ── Per-variant detector-signal enrichment ────────────────────────
             # replay_token: token presented well outside the replay window
@@ -688,7 +723,9 @@ class EventEngine:
             # timestamp_inconsistency: device declares a past time on this event
             if spec.anomaly_type == "timestamp_inconsistency":
                 delta            = random.uniform(400, 900)
-                injected_ts      = rs["current_ts"] - delta
+                observed_timestamp = semantic_event_ts - delta
+                observed_timestamp_source = "injected_device_timestamp"
+                targeted_temporal_relationship = "declared_event_time_after_predecessor"
                 ctx["timestamp_delta_s"] = round(delta, 2)
 
             # duplicate_sequence: full auth sequence replayed inside open session
@@ -747,7 +784,11 @@ class EventEngine:
                 failure_reason=f"invalid_transition_{spec.anomaly_type}",
                 session_id=legacy_session_id, scenario_id=spec.scenario_id,
                 security_context=security_context,
-                timestamp=injected_ts, delay=delay, retry_count=rs["retry_count"],
+                timestamp=semantic_event_ts,
+                observed_timestamp=observed_timestamp,
+                observed_timestamp_source=observed_timestamp_source,
+                targeted_temporal_relationship=targeted_temporal_relationship,
+                delay=delay, retry_count=rs["retry_count"],
                 token_id=inj_token_id,
                 token_expiry=rs["token_expiry"] if inj_token_id else None,
                 token_scope=token_scope if inj_token_id else None,
@@ -796,6 +837,11 @@ class EventEngine:
         context = self._build_context(
             spec, events, ctx, te, security_context, self.persistent_context
         )
+        security_context.trace_ended_at = semantic_clock.now
+        self.persistent_context.complete_trace(semantic_clock.now)
+        # Rebuild after closing the trace so exported context contains the final
+        # authoritative cursor. Feature sampling consumes no semantic time.
+        context.trace_ended_at = semantic_clock.now
         self.last_authentication_context = security_context
         return events, context
 
@@ -823,6 +869,7 @@ class EventEngine:
         through exactly the same event-construction path.
         """
         security_context: AuthenticationSessionContext = rs["security_context"]
+        semantic_clock: SemanticClock = rs["semantic_clock"]
         prev_state = sm.state
 
         # Establish identifier scope before emitting the event that starts it.
@@ -845,7 +892,7 @@ class EventEngine:
             delay = te.next_retry_delay()
         else:
             delay = self._sample_delay(event_type, profile)
-        rs["current_ts"] += delay
+        rs["current_ts"] = semantic_clock.advance(delay)
         security_context.current_timestamp = rs["current_ts"]
         result, failure_reason = self._outcome(event_type, is_anomaly=False)
 
@@ -859,6 +906,10 @@ class EventEngine:
             result, failure_reason = EventResult.FAILURE, "token_not_issued"
         elif event_type == EventType.TOKEN_VALIDATED and not security_context.token_presented:
             result, failure_reason = EventResult.FAILURE, "token_not_presented"
+        elif event_type == EventType.TOKEN_VALIDATED and te.is_token_expired(
+            semantic_clock.now
+        ):
+            result, failure_reason = EventResult.FAILURE, "token_expired"
         elif event_type == EventType.SESSION_OPENED and (
             not security_context.authenticated_context_active
             or security_context.token_validation_result is not TokenValidationResult.VALIDATED
@@ -895,28 +946,38 @@ class EventEngine:
 
         # ── Update shared token/nonce context ─────────────────────────────────
         if event_type == EventType.TOKEN_ISSUED and operation_succeeded:
+            refreshing_existing_token = security_context.token_issued
             rs["token_id"]     = str(uuid.uuid4())
             rs["token_expiry"] = rs["current_ts"] + cfg.security.token_lifetime_s
             security_context.token_id = rs["token_id"]
+            security_context.token_issued_at = semantic_clock.now
+            security_context.token_validity_duration_s = cfg.security.token_lifetime_s
             security_context.token_expiry = rs["token_expiry"]
-            te.record_token_issued(rs["current_ts"])         # Phase 3
+            if refreshing_existing_token:
+                te.record_renewal(semantic_clock.now)
+                security_context.renewed_token_issued_at = semantic_clock.now
+            else:
+                te.record_token_issued(semantic_clock.now)
             security_context.token_issued = True
             security_context.token_presented = False
+            security_context.token_presented_at = None
+            security_context.token_validation_at = None
             security_context.token_validation_result = TokenValidationResult.NOT_EVALUATED
             security_context.token_context_active = False
         if event_type == EventType.RENEWAL_REQUEST and operation_succeeded:
-            # Renewal extends the token's lifetime from the renewal moment.
-            rs["token_expiry"] = rs["current_ts"] + cfg.security.token_lifetime_s
-            security_context.token_expiry = rs["token_expiry"]
+            # A request does not refresh validity before credentials are issued.
+            security_context.renewal_requested_at = semantic_clock.now
         if event_type == EventType.TOKEN_PRESENTED and operation_succeeded:
             security_context.token_presented = True
-            te.record_token_presented(rs["current_ts"])      # Phase 3
+            security_context.token_presented_at = semantic_clock.now
+            te.record_token_presented(semantic_clock.now)
         if event_type == EventType.TOKEN_VALIDATED:
             security_context.token_validation_result = (
                 TokenValidationResult.VALIDATED
                 if operation_succeeded else TokenValidationResult.REJECTED
             )
             security_context.token_context_active = operation_succeeded
+            security_context.token_validation_at = semantic_clock.now
         elif event_type == EventType.TOKEN_REJECTED and transition_applied:
             security_context.token_validation_result = TokenValidationResult.REJECTED
             security_context.token_presented = False
@@ -924,7 +985,11 @@ class EventEngine:
         if event_type == EventType.CHALLENGE_SENT and operation_succeeded:
             rs["nonce"] = hashlib.blake2s(uuid.uuid4().bytes).hexdigest()[:16]
             security_context.current_challenge_nonce = rs["nonce"]
-            te.record_nonce_issued(rs["current_ts"])         # Phase 3
+            security_context.challenge_issued_at = semantic_clock.now
+            security_context.challenge_response_at = None
+            te.record_nonce_issued(semantic_clock.now)
+        elif event_type == EventType.RESPONSE_SENT and operation_succeeded:
+            security_context.challenge_response_at = semantic_clock.now
         if event_type in {
             EventType.AUTHENTICATION_FAILURE,
             EventType.TOKEN_REJECTED,
@@ -949,7 +1014,7 @@ class EventEngine:
             security_context.record_authentication_failure()
 
         if event_type == EventType.SESSION_OPENED and operation_succeeded:
-            security_context.open_protected_session()
+            security_context.open_protected_session(semantic_clock.now)
 
         if event_type == EventType.ACCESS_GRANTED:
             if authorization_evaluation is None:
@@ -980,7 +1045,7 @@ class EventEngine:
             EventType.DISCONNECT,
             EventType.TIMEOUT,
         } and transition_applied:
-            security_context.terminate_session()
+            security_context.terminate_session(semantic_clock.now)
 
         # ── Phase C: drive the real domain entities (flag-gated; no-op if None) ─
         # Exercises ECDH / enrollment / token issuance / broker sessions on the
@@ -1028,7 +1093,6 @@ class EventEngine:
         elif event_type == EventType.RENEWAL_REQUEST and operation_succeeded:
             ctx["s6_latency_ms"]    = round(delay_ms, 2)
             ctx["re_auth_required"] = 1
-            te.record_renewal(rs["current_ts"])              # Phase 3: reset token clock
         elif event_type == EventType.ACCESS_DENIED and transition_applied:
             ctx["topic_scope_violation"] = 1 if random.random() < 0.3 else 0
 
@@ -1102,10 +1166,7 @@ class EventEngine:
         inter_arrival = round(1000.0 / pkt_rate, 2)
         frame_len     = random.randint(64, 256)
         seg_len       = random.randint(128, 512)
-        # Session span from the monotonic clock: latest stamped time minus the
-        # first event. Using max() (not events[-1]) and clamping at 0 keeps the
-        # duration correct even when a timestamp_inconsistency event carries a
-        # backward-dated stamp in the middle of the sequence.
+        # Session span comes exclusively from authoritative semantic timestamps.
         session_span  = max(0.0, max(e.timestamp for e in events) - events[0].timestamp)
         conn_duration = round(session_span * 1000, 2)
 
@@ -1330,6 +1391,48 @@ class EventEngine:
             resource_operation_outcomes = tuple(
                 request.resource_operation_outcome.value for request in access_requests
             ),
+            semantic_time_domain         = (
+                security_context.semantic_time_domain
+                if security_context else SEMANTIC_TIME_DOMAIN
+            ),
+            trace_started_at             = (
+                security_context.trace_started_at if security_context else None
+            ),
+            trace_ended_at               = (
+                security_context.trace_ended_at if security_context else None
+            ),
+            token_issued_at              = (
+                security_context.token_issued_at if security_context else None
+            ),
+            token_presented_at           = (
+                security_context.token_presented_at if security_context else None
+            ),
+            token_validation_at          = (
+                security_context.token_validation_at if security_context else None
+            ),
+            token_validity_duration_s    = (
+                security_context.token_validity_duration_s if security_context else None
+            ),
+            challenge_issued_at          = (
+                security_context.challenge_issued_at if security_context else None
+            ),
+            challenge_response_at        = (
+                security_context.challenge_response_at if security_context else None
+            ),
+            protected_session_started_at = (
+                security_context.protected_session_started_at
+                if security_context else None
+            ),
+            protected_session_ended_at   = (
+                security_context.protected_session_ended_at
+                if security_context else None
+            ),
+            renewal_requested_at         = (
+                security_context.renewal_requested_at if security_context else None
+            ),
+            renewed_token_issued_at      = (
+                security_context.renewed_token_issued_at if security_context else None
+            ),
         )
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1402,6 +1505,9 @@ class EventEngine:
         token_scope:    Optional[str]   = None,
         topic:          Optional[str]   = None,
         resource_id:    Optional[str]   = None,
+        observed_timestamp: Optional[float] = None,
+        observed_timestamp_source: str = "semantic_clock",
+        targeted_temporal_relationship: Optional[str] = None,
     ) -> AuthEvent:
         access_request = (
             security_context.current_access_request
@@ -1430,6 +1536,11 @@ class EventEngine:
             protected_session_id       = security_context.protected_session_id,
             access_request_id          = access_request.request_id if access_request else None,
             timestamp                  = timestamp,
+            observed_timestamp         = (
+                timestamp if observed_timestamp is None else observed_timestamp
+            ),
+            observed_timestamp_source  = observed_timestamp_source,
+            targeted_temporal_relationship = targeted_temporal_relationship,
             delay_since_previous_event = delay,
             token_id                   = token_id,
             token_expiry               = token_expiry,
