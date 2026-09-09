@@ -1,13 +1,17 @@
 """
 data/output_views.py
 ─────────────────────
-Layer 3 of 3 — Output Views
+Layer 3 of 3 — Historical/legacy Output Views
 
-Exports correlated event sequences in three formats:
+Exports the pre-C1 mixed-role representations in three formats:
 
   1. JSON event log   — one JSON object per sequence (full event-level detail)
   2. Event CSV        — one row per AuthEvent (sequence-aware models)
-  3. Feature CSV      — one row per session, all Phase 0 + Phase 2 features merged
+  3. Feature CSV      — one mixed-role historical row per session
+
+These APIs remain for historical analysis and notebook compatibility.  They
+are not the synchronized detector-ready interface.  New generation exports use
+``simulator.data.synchronized_views.SynchronizedOutputViews``.
 
 """
 
@@ -182,7 +186,7 @@ def to_event_df(sequences: SequenceInput) -> pd.DataFrame:
 
 def to_feature_df(sequences: SequenceInput) -> pd.DataFrame:
     """
-    One row per session.
+    One historical mixed-role row per session (not detector-ready).
 
     Merges Phase 2 aggregate features (from AuthEvent sequence) with all
     Phase 0 features (from SessionContext) into a single flat row.
@@ -466,6 +470,7 @@ def _build_row(
 # ══════════════════════════════════════════════════════════════════════════════
 
 class OutputViews:
+    """Legacy writer retained for pre-canonical dataset compatibility."""
     def __init__(self, output_dir: str = "data/output"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)

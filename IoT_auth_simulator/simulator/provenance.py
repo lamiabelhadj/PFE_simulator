@@ -25,8 +25,8 @@ from simulator.anomaly_contract import synchronized_capability_report
 
 BEHAVIOR_MODEL_VERSION = "behavioral-model-v1"
 GENERATOR_SOFTWARE_VERSION = "c1-sync-development"
-EVENT_SCHEMA_VERSION = "c1.5-development-event-schema"
-FEATURE_SCHEMA_VERSION = "c1.5-development-feature-schema"
+EVENT_SCHEMA_VERSION = "c1.6-development-observation-schema"
+FEATURE_SCHEMA_VERSION = "c1.6-development-derived-schema"
 CONFIGURATION_VERSION = "historical-defaults-27135bf"
 
 
@@ -95,9 +95,8 @@ def discover_generator_git_commit(repo_root: Optional[Path] = None) -> Optional[
 class GenerationProvenance:
     """Traceability metadata for one generation run.
 
-    The structure is available now as C1.1 scaffolding.  It is not yet written
-    into historical output schemas, because output/schema changes are outside
-    this task.
+    Synchronized C1.6 outputs attach this structure to their provenance view.
+    It remains absent from the historical compatibility schemas.
     """
 
     behavior_model_version: str

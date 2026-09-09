@@ -8,7 +8,7 @@ Architecture (Phase 2)
 ──────────────────────
   ScenarioEngine.batch()  →  List[ScenarioSpec]
   EventEngine.execute()   →  (List[AuthEvent], SessionContext)
-  OutputViews / exporter  →  JSON log, event CSV, feature CSV
+  synchronized exporter   →  observations, GT, provenance, debug, manifests
 """
 
 import random
