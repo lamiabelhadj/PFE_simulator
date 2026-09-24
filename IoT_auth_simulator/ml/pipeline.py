@@ -11,7 +11,7 @@ Usage
 
     # From a pre-generated DataFrame
     import pandas as pd
-    df = pd.read_csv("data/output/iot_auth_features.csv")
+    df = pd.read_csv("simulator/data/output/iot_auth_ml_experiments_features.csv")
     results = run(df=df, target="attack_type")
 """
 
