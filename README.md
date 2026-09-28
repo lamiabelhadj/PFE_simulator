@@ -244,6 +244,54 @@ train and benchmark three classifiers.
   (weighted), ROC-AUC, confusion matrix, per-class report and top feature
   importances, plus a sorted model-comparison table saved to CSV.
 
+### Common evaluation pipeline (`ml/evaluation/`)
+
+One shared implementation of the load → clean → split → evaluate → compare
+steps, so every model is scored on the same rows, columns and metrics. It
+works with any scikit-learn classifier (`Pipeline`, `GridSearchCV`, …).
+
+| Module | Provides |
+|--------|----------|
+| `data.py` | `load_features()`, `prepare()` → `Dataset`, `.split()` → `Split`, `structural_leak_columns()` |
+| `estimators.py` | `make_preprocessor()` (scaled or passthrough + one-hot), `default_models()` |
+| `metrics.py` | anomaly-class (binary) / macro (multiclass) metrics, per-attack-type table, operating points |
+| `report.py` | `evaluate()` → `EvalReport`, `compare()`, `benchmark()`, `cross_validate()`, `leakage_check()`, `feature_importance()` |
+| `plots.py` | confusion matrix, ROC/PR overlay, per-attack recall, threshold curves, comparison bars, importances |
+
+```python
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from ml.evaluation import load_features, prepare, make_preprocessor, evaluate, leakage_check
+from ml.evaluation import plots
+
+data  = prepare(load_features(), target="is_anomaly")   # or "attack_type"
+split = data.split(test_size=0.20, seed=42)
+
+def rf(d):   # a factory, so leakage_check can rebuild it on fewer columns
+    return Pipeline([("pre", make_preprocessor(d)),
+                     ("rf",  RandomForestClassifier(n_estimators=300, random_state=42))])
+
+report = evaluate(rf(split), split, name="Random Forest", oof_cv=5)
+report.print()                 # metrics, classification report, confusion matrix
+report.per_attack_type()       # detection rate per attack type
+report.operating_points()      # thresholds tuned on out-of-fold TRAIN scores
+plots.plot_binary_panel(report)
+leakage_check(rf, data)        # all features vs structure-free, same test rows
+```
+
+From the command line (writes CSVs, `run.json` and PNGs to
+`simulator/data/output/evaluation/<target>/`):
+
+```bash
+python -m ml.evaluation --target both --leakage-check --cv 5
+python -m ml.evaluation --models rf --structure-free --no-plots
+```
+
+Binary precision / recall / F1 are for the **anomaly class**, not weighted
+averages. A weighted F1 is carried by the normal majority and hides missed
+attacks. `ml/evaluator.py` (used by `ml/pipeline.run()`) still reports weighted
+metrics.
+
 > **Note on label leakage:** because injected anomalies terminate the session
 > at the injection point, attack sessions are systematically shorter than
 > normal ones and several structural features correlate strongly with the
@@ -284,6 +332,12 @@ PFE_simulator/
         ├── pipeline.py                 # generate → preprocess → train → evaluate
         ├── preprocessing.py            # leakage-aware feature preprocessing
         ├── evaluator.py                # metrics + model comparison
+        ├── evaluation/                 # common evaluation pipeline (python -m ml.evaluation)
+        │   ├── data.py                 # load, clean, stratified split
+        │   ├── estimators.py           # shared preprocessor + reference models
+        │   ├── metrics.py              # metric functions and breakdown tables
+        │   ├── report.py               # evaluate / compare / leakage_check / CV
+        │   └── plots.py                # matplotlib figures
         └── models/
             ├── logistic_regression.py
             ├── decision_tree.py
