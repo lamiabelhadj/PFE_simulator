@@ -1,0 +1,7 @@
+|--- response_delay_min <= 0.000621
+|   |--- class: 1
+|--- response_delay_min >  0.000621
+|   |--- max_nonce_multiplicity <= 4.500000
+|   |   |--- class: 0
+|   |--- max_nonce_multiplicity >  4.500000
+|   |   |--- class: 1

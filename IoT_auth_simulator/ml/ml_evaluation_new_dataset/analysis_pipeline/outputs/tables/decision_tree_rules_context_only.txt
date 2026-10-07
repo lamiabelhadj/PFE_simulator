@@ -1,0 +1,22 @@
+|--- authentication_success_delay_mean <= 0.305612
+|   |--- n_nonce_events <= 4.500000
+|   |   |--- authentication_success_delay_mean <= 0.142515
+|   |   |   |--- class: 0
+|   |   |--- authentication_success_delay_mean >  0.142515
+|   |   |   |--- class: 0
+|   |--- n_nonce_events >  4.500000
+|   |   |--- active_delay_mean <= 0.443279
+|   |   |   |--- class: 0
+|   |   |--- active_delay_mean >  0.443279
+|   |   |   |--- class: 0
+|--- authentication_success_delay_mean >  0.305612
+|   |--- duration_s <= 0.878080
+|   |   |--- delay_max <= 0.386470
+|   |   |   |--- class: 1
+|   |   |--- delay_max >  0.386470
+|   |   |   |--- class: 1
+|   |--- duration_s >  0.878080
+|   |   |--- token_issued_delay_mean <= 0.085852
+|   |   |   |--- class: 0
+|   |   |--- token_issued_delay_mean >  0.085852
+|   |   |   |--- class: 1
